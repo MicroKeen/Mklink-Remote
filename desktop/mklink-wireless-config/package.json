@@ -1,0 +1,40 @@
+{
+  "name": "mklink-wireless-config",
+  "version": "0.8.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1 --port 1420 --strictPort",
+    "build": "node scripts/prepare-device-web.mjs && tsc --noEmit && vite build",
+    "preview": "vite preview --host 127.0.0.1 --port 1421",
+    "tauri": "tauri",
+    "test": "vitest run",
+    "verify:all": "node scripts/verify.mjs",
+    "desktop:build": "tauri build --bundles nsis",
+    "test:ui": "node scripts/public-ui-smoke.cjs"
+  },
+  "dependencies": {
+    "@fontsource/ibm-plex-mono": "^5",
+    "@fontsource/inter": "^5",
+    "@fontsource/noto-sans-sc": "^5",
+    "@phosphor-icons/react": "^2.1.10",
+    "@radix-ui/react-select": "2.4.1",
+    "@tauri-apps/api": "^2",
+    "qrcode": "^1.5.4",
+    "react": "^19",
+    "react-dom": "^19",
+    "zod": "^4"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.64.1",
+    "@tauri-apps/cli": "^2",
+    "@types/node": "^24",
+    "@types/qrcode": "^1.5.6",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "@vitejs/plugin-react": "^5",
+    "typescript": "^5",
+    "vite": "^7",
+    "vitest": "^4"
+  }
+}

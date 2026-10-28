@@ -1,0 +1,36 @@
+[package]
+name = "mklink-wireless-config"
+version = "0.8.0"
+edition = "2021"
+default-run = "mklink-wireless-config"
+
+[lib]
+name = "mklink_remote_core"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+tauri-plugin-opener = "2.7.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+regex = "1"
+chrono = { version = "0.4", default-features = false, features = ["std"] }
+serialport = "4"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+uuid = { version = "1", features = ["v4"] }
+btleplug = "0.11"
+futures-util = "0.3"
+tokio = { version = "1", features = ["rt-multi-thread", "time"] }
+aes-gcm = "0.10"
+hmac = "0.12"
+sha2 = "0.10"
+getrandom = "0.2"
+base64 = "0.22"
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.61.3", features = ["Devices_Bluetooth", "Devices_Bluetooth_GenericAttributeProfile"] }
+

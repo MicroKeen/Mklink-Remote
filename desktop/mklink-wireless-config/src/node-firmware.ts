@@ -1,0 +1,6 @@
+import {z} from 'zod';
+export const NodeImage=z.object({path:z.string(),bytes:z.number().int().min(1024).max(4194304),sha256:z.string().regex(/^[0-9a-f]{64}$/),version:z.string().min(1),project:z.literal('n16r8_wireless_gateway')});
+export type NodeImageInfo=z.infer<typeof NodeImage>;
+export const NodeUpdate=z.object({protocol:z.literal(1),state:z.enum(['idle','receiving','writing','ready','activating','pending_verify','confirming','confirmed','failed','aborted','rolled_back','not_activated']),job_id:z.string(),sha256:z.string(),version:z.string(),error:z.string(),bytes:z.number().nonnegative(),accepted_bytes:z.number().nonnegative(),written_bytes:z.number().nonnegative(),chunk_max:z.number().positive(),image_max:z.number().positive(),running_slot:z.string(),running_version:z.string(),destination_slot:z.string(),health_ready:z.boolean(),busy:z.boolean(),confirm_remaining_ms:z.number().nonnegative()});
+export type NodeUpdateInfo=z.infer<typeof NodeUpdate>;
+export const nodeUpdateNames:Record<NodeUpdateInfo['state'],string>={idle:'等待上传',receiving:'PSRAM 接收中',writing:'备用分区写入与校验',ready:'备用固件已就绪',activating:'即将重启',pending_verify:'新版本等待确认',confirming:'正在确认新版本',confirmed:'新版本已确认',failed:'升级未完成',aborted:'上传已取消',rolled_back:'已回退至原版本',not_activated:'备用固件尚未激活'};

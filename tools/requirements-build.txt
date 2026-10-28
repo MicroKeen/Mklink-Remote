@@ -1,0 +1,8 @@
+# Direct tool versions used for this Windows qualification. Upstream extras are
+# installed separately from the pinned SDK/source; this is not a transitive lock.
+esptool==5.6.0
+pyserial==3.5
+bleak==3.0.2
+cryptography==50.0.2
+pyinstaller==6.22.3
+pyelftools==0.32

@@ -1,0 +1,1 @@
+idf_component_register(SRCS "fixture.c" "proxy.c" INCLUDE_DIRS "." REQUIRES esp_wifi esp_netif esp_event nvs_flash esp_http_client esp_hw_support esp_driver_usb_serial_jtag json lwip mbedtls tcp_transport esp_timer)

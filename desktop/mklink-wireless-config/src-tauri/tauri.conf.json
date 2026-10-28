@@ -1,0 +1,61 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Mklink 无线工作台",
+  "version": "0.8.0",
+  "identifier": "dev.mklink.wireless-config",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build",
+    "devUrl": "http://localhost:1420",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Mklink 无线工作台",
+        "width": 1360,
+        "height": 940,
+        "minWidth": 980,
+        "minHeight": 700
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; img-src 'self' data: asset: http://asset.localhost; style-src 'self' 'unsafe-inline'; font-src 'self' data:; connect-src ipc: http://ipc.localhost"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": [
+      "nsis"
+    ],
+    "resources": {
+      "resources/firmware/": "resources/firmware/",
+      "resources/branding/": "resources/branding/",
+      "resources/device-tool/remote-server/": "resources/device-tool/remote-server/",
+      "resources/device-tool/mklink-device-tool.exe": "resources/device-tool/mklink-device-tool.exe",
+      "resources/device-tool/mklink-target-tool.exe": "resources/device-tool/mklink-target-tool.exe",
+      "resources/device-tool/MKLINK-LICENSE.txt": "resources/device-tool/MKLINK-LICENSE.txt",
+      "resources/device-tool/PYSERIAL-NOTICE.txt": "resources/device-tool/PYSERIAL-NOTICE.txt",
+      "resources/cli/mklink-remote.exe": "mklink-remote.exe"
+    },
+    "windows": {
+      "nsis": {
+        "languages": [
+          "SimpChinese",
+          "English"
+        ],
+        "displayLanguageSelector": true,
+        "installerHooks": "installer-hooks.nsh",
+        "installerIcon": "icons/icon.ico",
+        "uninstallerIcon": "icons/icon.ico"
+      }
+    },
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ]
+  }
+}

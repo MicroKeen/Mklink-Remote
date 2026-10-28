@@ -1,0 +1,26 @@
+import {useEffect,useRef,useState} from 'react';
+import {api,demo} from './client';
+import type {InstallJob} from './contract';
+import {nodeUpdateNames,type NodeImageInfo,type NodeUpdateInfo} from './node-firmware';
+export default function NodeFirmwarePanel({connected,node,lease,busy,job,onAction,onRestart}:{connected:boolean;node:string;lease:string;busy:boolean;job:InstallJob;onAction:(name:string,fn:()=>Promise<void>)=>Promise<void>;onRestart:()=>void}){
+  const [image,setImage]=useState<NodeImageInfo|null>(null),[state,setState]=useState<NodeUpdateInfo|null>(null),[error,setError]=useState(''),[confirm,setConfirm]=useState(false);
+  const dialog=useRef<HTMLDialogElement>(null),button=useRef<HTMLButtonElement>(null);
+  useEffect(()=>{setImage(null);setState(null);setError('');},[node]);
+  useEffect(()=>{let alive=true;if(!connected)return;const read=async()=>{try{const s=await api.nodeUpdateStatus();if(alive){setState(s);setError('');}}catch(e){if(alive)setError(String(e));}};void read();const timer=setInterval(()=>void read(),2500);return()=>{alive=false;clearInterval(timer);};},[connected,node,job.running,job.stage]);
+  useEffect(()=>{if(confirm&&!dialog.current?.open)dialog.current?.showModal();if(!confirm&&dialog.current?.open)dialog.current?.close();},[confirm]);
+  const enabled=connected&&!!lease&&!busy;
+  async function claim(){if(!state)throw Error('请先读取升级状态');await api.rpc('firmware.claim',{lease_token:lease,job_id:state.job_id,sha256:state.sha256});}
+  async function refresh(){setState(await api.nodeUpdateStatus());}
+  return <section className="panel node-firmware-panel"><div className="panel-heading"><div><p className="eyebrow">NODE FIRMWARE</p><h2>节点固件升级</h2><p>通过当前 USB1、Wi-Fi 或蓝牙连接升级 ESP32-S3，保留网络与配对信息。</p></div><span className="badge">{demo?'演示 · ':''}{state?nodeUpdateNames[state.state]:'等待节点'}</span></div><div className="panel-body">
+    <ol className="install-steps"><li>选择节点 APP，上传到 PSRAM 并校验完整镜像</li><li>写入备用分区并读回核对，确认后切换重启</li><li>重连同一节点，读取启动状态并确认新版本；未确认会自动回退</li></ol>
+    <div className="target-path"><div className="field"><label htmlFor="node-firmware-path">ESP32-S3 节点 APP · .bin</label><input id="node-firmware-path" value={image?.path??''} readOnly placeholder="请选择本款节点的 OTA APP 镜像"/></div><button disabled={busy} onClick={()=>void onAction('读取节点镜像',async()=>{const path=await api.chooseNodeFirmware();if(path)setImage(await api.inspectNodeFirmware(path));})}>选择节点固件</button></div>
+    {image&&<dl className="target-facts"><dt>升级版本</dt><dd>{image.version}</dd><dt>镜像大小</dt><dd>{(image.bytes/1024).toFixed(1)} KiB</dd><dt>SHA256</dt><dd className="mono">{image.sha256}</dd></dl>}
+    <div className="form-actions"><button ref={button} className="primary" disabled={!enabled||!image||!!state?.busy} onClick={()=>setConfirm(true)}>写入备用固件</button><button disabled={!enabled||state?.state!=='ready'} onClick={()=>void onAction('切换节点固件',async()=>{await claim();try{await api.rpc('firmware.activate',{job_id:state?.job_id,lease_token:lease});}finally{onRestart();}})}>切换并重启节点</button><button disabled={!enabled||state?.state!=='pending_verify'||!state.health_ready} onClick={()=>void onAction('确认新版本',async()=>{await claim();await api.rpc('firmware.confirm',{job_id:state?.job_id,lease_token:lease});await refresh();})}>确认新版本正常</button><button disabled={!connected||busy} onClick={()=>void onAction('读取升级状态',refresh)}>读取升级状态</button><button disabled={!enabled||!['receiving','ready'].includes(state?.state??'')} onClick={()=>void onAction('取消节点升级',async()=>{await claim();await api.rpc('firmware.abort',{job_id:state?.job_id,lease_token:lease});await refresh();})}>取消未激活升级</button></div>
+    {job.stage.startsWith('ota_')&&<div className="note-box" role="status"><p>{job.detail}</p>{job.running&&job.total>0&&<progress aria-label="节点升级进度" value={job.done} max={job.total}/>}</div>}
+    {state&&<dl className="target-facts"><dt>当前运行</dt><dd>{state.running_version} · {state.running_slot}</dd><dt>备用版本</dt><dd>{state.version||'—'} · {state.destination_slot||'—'}</dd><dt>已接收 / 已写入</dt><dd>{state.accepted_bytes.toLocaleString()} / {state.written_bytes.toLocaleString()} 字节</dd>{state.state==='pending_verify'&&<><dt>确认剩余时间</dt><dd>{Math.ceil(state.confirm_remaining_ms/1000)} 秒</dd></>}<dt>设备自检</dt><dd>{state.health_ready?'已就绪':'等待完成'}</dd></dl>}
+    {(error||state?.error)&&<p className="inline-warn" role="alert">{error||state?.error}</p>}
+    {!lease&&connected&&<p className="block-hint">请先取得操作权，再上传或确认固件。</p>}
+    <p className="block-hint">出厂固件没有 OTA 接口时，请先通过 USB1 安装默认固件。写入结果不明确时先读取升级状态。</p>
+    <dialog ref={dialog} className="target-confirm" aria-labelledby="node-update-title" onCancel={()=>setConfirm(false)} onClose={()=>{setConfirm(false);button.current?.focus();}}><h2 id="node-update-title">写入节点备用固件？</h2><p>{image?.version} · {image?.bytes.toLocaleString()} 字节</p><p>节点 {node} 的当前程序保持运行。备用分区校验通过后，再由你确认切换重启。</p><div className="form-actions"><button autoFocus onClick={()=>setConfirm(false)}>返回</button><button className="primary" onClick={()=>{setConfirm(false);void onAction('开始上传节点固件',async()=>{if(!image)throw Error('请先选择镜像');await api.startNodeUpdate(image.path,image.sha256,node,lease);});}}>上传并校验备用固件</button></div></dialog>
+  </div></section>;
+}

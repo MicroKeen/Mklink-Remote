@@ -1,0 +1,375 @@
+--- a/mklink/bridge.py
++++ b/mklink/bridge.py
+@@ -390,7 +390,9 @@
+         self._running = False
+         self._prompt_event.set()  # 唤醒可能等待的线程
+         if self._reader_thread and self._reader_thread.is_alive():
+-            self._reader_thread.join(timeout=2.0)
++            self._reader_thread.join(timeout=getattr(self, 'reader_close_timeout', 2.0))
++            if getattr(self, 'auto_recovery', True) is False and self._reader_thread.is_alive():
++                raise ConnectionError('Wireless reader still owns IO; transport ownership retained')
+         if self._serial and self._serial.is_open:
+             try:
+                 self._serial.close()
+@@ -434,6 +436,7 @@
+                 return None
+             transport = MuxTransport(self._serial.write, self._cmd_lock,
+                                      diagnostic_context={'connection': getattr(self, '_diagnostic_id', None), 'port': getattr(self, '_port', None)})
++            transport.command_timeout = getattr(self, 'mux_timeout', 3.0)
+             self._mux = transport  # The existing reader changes decoder before entry.
+             try:
+                 self._mux_marker.parent.mkdir(parents=True, exist_ok=True)
+@@ -826,7 +829,7 @@
+                 self._prompt_event.clear()
+ 
+             stop_prompt_seen = False
+-            for _attempt in range(_FAILED_STREAM_STOP_ATTEMPTS):
++            for _attempt in range(getattr(self, 'stream_stop_attempts', _FAILED_STREAM_STOP_ATTEMPTS)):
+                 if self._transport_error is not None:
+                     self._ctx.state = DeviceState.ERROR
+                     return False
+@@ -841,7 +844,7 @@
+                     return False
+                 except AttributeError:
+                     break
+-                if self._prompt_event.wait(timeout=_FAILED_STREAM_STOP_TIMEOUT):
++                if self._prompt_event.wait(timeout=getattr(self, 'stream_stop_timeout', _FAILED_STREAM_STOP_TIMEOUT)):
+                     if self._transport_error is not None:
+                         self._ctx.state = DeviceState.ERROR
+                         return False
+@@ -871,7 +874,7 @@
+                 self._ctx.state = DeviceState.ERROR
+                 return False
+ 
+-            deadline = time.monotonic() + _FAILED_STREAM_IDENTITY_TIMEOUT
++            deadline = time.monotonic() + getattr(self, 'stream_identity_timeout', _FAILED_STREAM_IDENTITY_TIMEOUT)
+             while True:
+                 remaining = deadline - time.monotonic()
+                 if remaining <= 0 or not self._prompt_event.wait(timeout=remaining):
+--- a/mklink/device.py
++++ b/mklink/device.py
+@@ -362,7 +362,8 @@
+             raise DeviceNotConnectedError(
+                 'No unique MKLink command port; run mklink probes list and select a probe or explicit port'
+             )
+-        bridge = MKLinkSerialBridge(candidate)
++        from mklink_remote.transport_factory import create_bridge
++        bridge = create_bridge(candidate)
+         try:
+             if not bridge.connect():
+                 reason = getattr(bridge, 'last_connect_error', None) or 'Command-port handshake failed'
+@@ -427,6 +428,13 @@
+             except Exception:
+                 self.close()
+                 raise
++
++    def _deploy_flash_algorithm(self, algorithm):
++        provider = getattr(self._bridge, 'upload_algorithm', None)
++        if provider is not None:
++            return provider(algorithm)
++        from mklink.cmsis_dap.algorithm_catalog import deploy_algorithm_to_probe
++        return deploy_algorithm_to_probe(algorithm)
+ 
+     def set_debug_speed(self, profile: str) -> dict:
+         """Apply a named 4/10/20/30 MHz profile to an idle connection."""
+@@ -936,6 +944,10 @@
+                 result["verified"] = True
+             return result
+ 
++        prepare = getattr(self._bridge, 'prepare_firmware', None)
++        if prepare is not None:
++            prepare(firmware)  # Radio staging must finish before FLM halts the target.
++
+         if resolved_target:
+             from mklink.cmsis_dap.algorithm_catalog import (
+                 FlashAlgorithmError,
+@@ -960,7 +972,7 @@
+                     )
+                     catalog_algorithm = catalog_selections[0].algorithm
+                     if len(catalog_selections) == 1:
+-                        flm_path = deploy_algorithm_to_probe(catalog_algorithm)
++                        flm_path = self._deploy_flash_algorithm(catalog_algorithm)
+                         algorithm_flash_base = _fmt_hex(catalog_algorithm.flash_start)
+                         if ext == ".hex":
+                             flash_base = algorithm_flash_base
+@@ -988,6 +1000,8 @@
+                 OSError,
+                 RuntimeError,
+             ):
++                if getattr(self._bridge, 'auto_recovery', True) is False:
++                    raise  # Wireless upload outcome unknown: never use an older FLM.
+                 # A verified profile remains a conservative compatibility
+                 # fallback when a standalone package omits the catalog or a
+                 # catalog payload cannot be deployed to the probe's volume.
+@@ -1035,7 +1049,7 @@
+             with tempfile.TemporaryDirectory(prefix="mklink-flash-regions-") as temporary:
+                 for index, selection in enumerate(catalog_selections):
+                     algorithm = selection.algorithm
+-                    flm_path = deploy_algorithm_to_probe(algorithm)
++                    flm_path = self._deploy_flash_algorithm(algorithm)
+                     selected_ram = algorithm.ram_start or int(ram_base, 0)
+                     if not self._flash.load_flm(
+                         flm_path,
+@@ -2672,7 +2686,7 @@
+     # close() 释放；与 hil_core.lockd 编排器在同一锁名上互斥（T5 原生对齐）。
+     from mklink.hil_lock import HilFileLock, transport_lock_name
+     hil_lock = HilFileLock(
+-        transport_lock_name("usb-serial", dev.port),
++        transport_lock_name("s3" if str(dev.port).startswith("s3-") else "usb-serial", dev.port),
+         owner_id=f"mklink-{os.getpid()}",
+     )
+     try:
+--- a/mklink/flash.py
++++ b/mklink/flash.py
+@@ -474,6 +474,9 @@
+         Returns:
+             MICROKEEN 上的文件名（不含路径），失败返回 None
+         """
++        provider = getattr(self._bridge, 'upload_firmware', None)
++        if provider is not None:
++            return provider(local_path)
+         disk = find_microkeen_disk()
+         if not disk:
+             return None
+--- a/mklink/mux.py
++++ b/mklink/mux.py
+@@ -52,8 +52,9 @@
+     # sustained overload, never block the sole USB reader or command replies.
+     WATCH_QUEUE_BYTES = 262144
+ 
+-    def __init__(self, write, command_lock=None, *, diagnostic_context=None):
++    def __init__(self, write, command_lock=None, *, diagnostic_context=None, command_timeout=3.0):
+         self._diagnostic_context = diagnostic_context or {}
++        self.command_timeout = command_timeout
+         self._write = write
+         self._condition = threading.Condition()
+         self._commands = command_lock or threading.RLock()
+@@ -109,7 +110,7 @@
+         if self._next_id > 0xffffffff:
+             raise MuxError('Request IDs exhausted; close and create a new session')
+         req = self._next_id
+-        self._pending = (op, req, time.monotonic()+3, heartbeat)
++        self._pending = (op, req, time.monotonic()+self.command_timeout, heartbeat)
+         self._reply = None
+         wire = packet(op, 0 if op == 1 else self.epoch, req,
+                       (self.nonce if 0x10 <= op < 0x40 else b'') + payload)
+--- a/mklink/probe_volumes.py
++++ b/mklink/probe_volumes.py
+@@ -99,6 +99,8 @@
+ def resolve_volume(probe_id):
+     from mklink.probes import select_probe
+     probe = select_probe(probe_id)
++    if probe.get('transport', '').startswith('s3-'):
++        raise RuntimeError('S3 has no local USB volume; use its verified file provider')
+     if not probe['identity_stable']:
+         raise RuntimeError('MSC requires a unique USB serial number')
+     identity = (probe['vid'], probe['pid'], probe['serial_number'].casefold())
+--- a/mklink/probes.py
++++ b/mklink/probes.py
+@@ -62,6 +62,16 @@
+         probes.append({"probe_id": probe_id, "port": port.device, "vid": port.vid, "pid": port.pid, "serial_number": port.serial_number or "",
+                        "description": port.description, "location": port.location or "", "identity_stable": stable,
+                        "alias": aliases.get(probe_id, "") if stable else ""})
++    from mklink_remote.s3_registry import inventory as wireless_inventory
++    try:
++        wireless = wireless_inventory()
++    except (ValueError, TypeError, KeyError, OSError):
++        import logging
++        logging.getLogger(__name__).warning('S3 registration unavailable; inspect local s3-nodes.json. USB discovery remains available.')
++        wireless = []
++    for probe in wireless:
++        probe['alias'] = aliases.get(probe['probe_id'], '')
++        probes.append(probe)
+     return sorted(probes, key=lambda p: (p["alias"].casefold(), p["probe_id"]))
+ 
+ 
+--- a/mklink/remote/acquisition.py
++++ b/mklink/remote/acquisition.py
+@@ -26,6 +26,8 @@
+     state['acquisition_transition'] = report
+     device, dispatcher = state.get('device'), state.get('dispatcher')
+     was_connected = bool(device is not None and device.connected)
++    original_bridge = getattr(device, '_bridge', None)
++    automatic_recovery = getattr(original_bridge, 'auto_recovery', True) is not False
+     saved = []
+     attempted = set()
+     async with _dashboard_start_lock(state):
+@@ -75,6 +77,8 @@
+                 # HPM and power-cycle downloads close the shared command handle.
+                 # Reopen only the same bound USB identity, preserving symbol state.
+                 if was_connected and not device.connected:
++                    if not automatic_recovery:
++                        raise RuntimeError('Wireless connection lost; explicit recovery required, no automatic reconnect')
+                     if any(_dashboard_worker_alive(manager) for _, manager, _, _ in saved):
+                         raise RuntimeError('A capture worker still owns the connection')
+                     if control is not None and control.info.get('probe_id'):
+@@ -97,6 +101,8 @@
+                         report['errors'].append(f'{name}: worker has not stopped')
+                     continue
+                 try:
++                    if not automatic_recovery and getattr(getattr(original_bridge, 'link', None), 'poisoned', False):
++                        raise RuntimeError('Wireless session outcome unknown; acquisition was not restarted')
+                     if device is None or not device.connected:
+                         raise RuntimeError('Device not connected')
+                     await _start_dashboard_manager_transaction(state, name, manager, restart)
+--- a/mklink/remote/api.py
++++ b/mklink/remote/api.py
+@@ -648,7 +648,12 @@
+     """Stop a dashboard, retaining leases while its worker remains active."""
+     error = None
+     try:
+-        manager.stop()
++        bridge = getattr(state.get('device'), '_bridge', None)
++        timeout = getattr(bridge, 'capture_stop_timeout', None)
++        if dashboard in {'rtt', 'systemview'} and isinstance(timeout, (int, float)):
++            manager.stop(timeout=timeout)
++        else:
++            manager.stop()
+     except Exception as exc:
+         error = exc
+     if _dashboard_worker_alive(manager):
+--- a/mklink/runtime.py
++++ b/mklink/runtime.py
+@@ -35,7 +35,7 @@
+         root = platform_data_dir().parent / "runtime"
+     if probe_id is not None:
+         import re
+-        if not re.fullmatch(r"(?:usb-|local-)[0-9a-f]{24}|lobby", probe_id):
++        if not re.fullmatch(r"(?:usb-|local-)[0-9a-f]{24}|s3-[0-9a-f]{12}|lobby", probe_id):
+             raise RuntimeErrorResponse("Invalid probe identity")
+         root = root / "probes" / probe_id
+     return root
+@@ -193,7 +193,7 @@
+                 root = _private_dir(runtime_id)
+                 command = [sys.executable]
+                 if not getattr(sys, "frozen", False):
+-                    command += ["-m", "mklink"]
++                    command += ["-m", "mklink_remote"]
+                 command += ["runtime", "serve", "--project-root", str(Path(project_root).resolve()), "--port", str(port), "--probe-id", probe_id, "--runtime-id", runtime_id]
+                 kwargs = {"cwd": str(Path(__file__).resolve().parent.parent), "stdin": subprocess.DEVNULL}
+                 if os.name == "nt":
+--- a/mklink/runtime_api.py
++++ b/mklink/runtime_api.py
+@@ -198,9 +198,10 @@
+                      'age_seconds': now-view['joined'], 'expires_in': None if view.get('live') else max(0, view['expires']-now)}
+                     for key, view in self.views.items() if key not in represented]
+         device = self.app.state.mklink_state.get('device')
++        presence = await asyncio.to_thread(self.presence)
+         return {'protocol': PROTOCOL, 'version': VERSION, 'probe_id': self.info.get('probe_id'),
+                 'instance_id': self.info['instance_id'], 'pid': self.info.get('pid'),
+-                'project_root': self.app.state.mklink_state['project_root'], 'transport': 'cdc',
++                'project_root': self.app.state.mklink_state['project_root'], 'transport': (presence.get('probe') or {}).get('transport', 'cdc'),
+                 'uptime_seconds': now-self.started, 'clients': clients, 'busy': bool(self.lifecycle_pending) or self.operation_lock.locked() or self.job_busy(),
+                 'connection_changes_pending': self.lifecycle_pending,
+                 'jobs': list(reversed(list(self.jobs.jobs.values())))[:8] if self.jobs else [], 'online_job': self.online_job(),
+@@ -212,7 +213,7 @@
+                 'streams': [{'name': name, 'running': manager.running, 'owner': self.acquisition_owner(name),
+                              'subscribers': sum(name in s.streams for s in self.sessions.values())}
+                             for name, manager in get_managers().items()],
+-                **await asyncio.to_thread(self.presence)}
++                **presence}
+ 
+     def session(self, session_id):
+         self.prune()
+@@ -519,6 +520,8 @@
+                 return await reject(422, "Invalid JSON control request")
+             if not isinstance(body, dict):
+                 return await reject(422, 'Control body must be an object')
++            if online_flash and selected.get('transport', '').startswith('s3-'):
++                return await reject(409, 'S3 target uses shared native flash jobs; local CMSIS-DAP is unavailable')
+             if online_flash and str(body.get("probe_id", "")).casefold() != selected["serial_number"].casefold():
+                 return await reject(409, "CMSIS-DAP probe does not match this window's physical probe")
+             if validated_capability:
+@@ -639,8 +642,9 @@
+     @api.get("/status")
+     async def status():
+         control.prune()
++        presence = await asyncio.to_thread(control.presence)
+         return {"protocol": PROTOCOL, "version": VERSION, "instance_id": info["instance_id"],
+-                "pid": info.get("pid"), "project_root": state["project_root"], "transport": "cdc",
++                "pid": info.get("pid"), "project_root": state["project_root"], "transport": (presence.get('probe') or {}).get('transport', 'cdc'),
+                 "probe_id": info.get("probe_id"), "clients": len(control.sessions), "busy": control.operation_lock.locked(),
+                 "capabilities": sorted(CAPABILITIES)}
+ 
+--- a/mklink/runtime_probe.py
++++ b/mklink/runtime_probe.py
+@@ -9,7 +9,7 @@
+ def _query(state, capability):
+     if capability not in PROBE_QUERIES:
+         raise ValueError('Unsupported probe query')
+-    from mklink.bridge import MKLinkSerialBridge
++    from mklink_remote.transport_factory import create_bridge
+     from mklink.power import read_power
+     from mklink.probes import select_probe
+     from mklink.remote.resource_manager import ResourceGroup
+@@ -24,7 +24,7 @@
+     bridge = None
+     owned = device is None
+     try:
+-        bridge = MKLinkSerialBridge(selected['port']) if owned else device._bridge
++        bridge = create_bridge(selected['port']) if owned else device._bridge
+         if owned and not bridge.connect(recover_stream=False):
+             raise HTTPException(409, 'Probe command port unavailable or not idle; no stream recovery attempted')
+         if bridge.state != DeviceState.READY:
+@@ -72,6 +72,9 @@
+     except RuntimeError:
+         return {'status': 'manual_required', 'message': '暂时无法识别下载器，请选择正确型号下载固件后手动升级。'}
+ 
++    if selected.get('transport', '').startswith('s3-'):
++        return {'status': 'manual_required', 'message': 'S3 target transport does not support local USB/UF2 probe updates'}
++
+     class CommandPort:
+         def copy_rbl(self, source, name, expected_disk):
+             from pathlib import Path
+@@ -110,7 +113,7 @@
+                 manager.release(owner)
+ 
+         def enter_bootloader(self):
+-            from mklink.bridge import MKLinkSerialBridge
++            from mklink_remote.transport_factory import create_bridge
+             from mklink.remote.resource_manager import ResourceGroup
+             manager = state['resource_manager']
+             owner = 'user:api:firmware-upgrade'
+@@ -127,7 +130,7 @@
+                         raise RuntimeError('Probe port changed')
+                     device.enter_bootloader()
+                 else:
+-                    bridge = MKLinkSerialBridge(current['port'])
++                    bridge = create_bridge(current['port'])
+                     if not bridge.connect(recover_stream=False):
+                         raise RuntimeError('Command port unavailable')
+                     bridge.enter_bootloader()
+--- a/mklink/runtime_recovery.py
++++ b/mklink/runtime_recovery.py
+@@ -66,6 +66,7 @@
+         c = self.control
+         device = c.app.state.mklink_state.get('device')
+         return bool(not c.stopping and device is not None and not self.expire_if_due()
++                    and getattr(getattr(device, '_bridge', None), 'auto_recovery', True) is not False
+                     and c.info.get('probe_id') not in (None, 'lobby')
+                     and self.attempts < 5
+                     and ((self.pending and self.device is device and self.identity == c.info.get('probe_id'))
+@@ -82,6 +83,9 @@
+         if c.stopping or not device or identity in (None, 'lobby'):
+             self.reset()
+             return
++        if getattr(getattr(device, '_bridge', None), 'auto_recovery', True) is False:
++            self.reset()
++            return  # Wireless uncertainty requires explicit user recovery; never replay.
+         if self.device is not device or self.identity != identity:
+             self.reset()
+             self.device, self.identity = device, identity
+--- a/mklink/remote/shared_target.py
++++ b/mklink/remote/shared_target.py
+@@ -234,6 +234,11 @@
+                     if action == 'erase_sector': arguments['address'] = _integer(params.get('address'), 'address')
+                 request_id = params.get('request_id') or uuid.uuid4().hex
+                 job = client.start_job(action, request_id=request_id, confirm=True, arguments=arguments)
++                # Wireless transfer can exceed an original client's fixed timeout.
++                # Return the existing retained job identity immediately; original
++                # remote_call(jobs.status) observes completion without replay.
++                if str(self.info.get('probe_id', '')).startswith('s3-') and action != 'reset':
++                    return {key: job.get(key) for key in ('job_id', 'request_id', 'state', 'action')}
+                 while job['state'] not in ('succeeded', 'failed', 'unknown'):
+                     time.sleep(.1)
+                     job = client.job_status(job['job_id'])

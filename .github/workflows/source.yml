@@ -1,0 +1,60 @@
+name: Source checks
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: desktop/mklink-wireless-config/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Prepare verified SDK and dependencies
+        shell: pwsh
+        run: |
+          python tools/prepare-upstream.py --sdk-only
+          python -m pip install -r tools/requirements-build.txt
+          python -m pip install '.deps/sdk-0.4.0[remote]'
+          npm --prefix desktop/mklink-wireless-config ci --legacy-peer-deps
+      - name: Offline source checks
+        run: python tools/verify-source.py --sdk .deps/sdk-0.4.0
+      - name: Browser automation
+        working-directory: desktop/mklink-wireless-config
+        run: |
+          npx playwright install chromium
+          npm run test:ui
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: source-check-results
+          path: |
+            output/*.log
+            output/source-verification.json
+            desktop/mklink-wireless-config/output/public-ui/
+  firmware:
+    runs-on: ubuntu-latest
+    container: espressif/idf:v5.5.2
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build S3 firmware and run host boundary tests
+        shell: bash
+        run: |
+          . "$IDF_PATH/export.sh"
+          idf.py -C boards/third-party-esp32-s3-n16r8/firmware/wireless_gateway build
+          gcc -std=c11 -Wall -Wextra -Werror -I boards/third-party-esp32-s3-n16r8/firmware/wireless_gateway/main tests/test_node_policy.c boards/third-party-esp32-s3-n16r8/firmware/wireless_gateway/main/node_policy.c -o /tmp/node-policy
+          /tmp/node-policy
+          python tests/run_base64_window.py
+          python tests/run_ota_state.py

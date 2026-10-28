@@ -1,0 +1,9 @@
+/node_modules/
+/dist/
+/src-tauri/target/
+/src-tauri/resources/device-tool/
+/src-tauri/resources/firmware/
+/output/
+/.target-venv/
+
+/.android-env.local.json
