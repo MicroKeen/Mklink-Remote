@@ -17,7 +17,7 @@
     },
     "mklink/mux.py": {
       "base_sha256": "62dd4bff831ccd8e0ea63effac2806edf4fb31dca21131c2fcf826284849e591",
-      "server_sha256": "b41edc6dbcdd1b93d68755a6046ef65abd718098264360d17e59ef11bef6b7b4"
+      "server_sha256": "d861a16c526b38d882d20e1699450a31f4a5eaaf13ea49f105399d5590a7ddc2"
     },
     "mklink/probe_volumes.py": {
       "base_sha256": "f741e1978f083465f01ed1fe32794b05206d9559a00d4a4816089f7d4d83c614",
@@ -54,6 +54,18 @@
     "mklink/remote/shared_target.py": {
       "base_sha256": "fff4253de8fd2e2227e19745eb0b60705491a9f4391ab1cb56363b50b2cfefdb",
       "server_sha256": "092c3210f15f9c3729e7871c2e2bf37a28ebb9a819e1119735c85c7ee91111c1"
+    },
+    "mklink/dump_benchmark.py": {
+      "base_sha256": "0a092bf1a7c9834fae26625df80894a621e47eb9a6caf5259e95df5856df7e99",
+      "server_sha256": "4655d49d92e8d587031b479d619e3f30f97b5e5b19e7f15de63e0685a1e1c02e"
+    },
+    "mklink/dump_memory.py": {
+      "base_sha256": "de51cbc0e124adb195e2effc579a260fd88dd90742fe38990099783c4e772475",
+      "server_sha256": "bafae931cbd448688b2821152e5b2852903f120b23336d10b633a9cc179dd7b4"
+    },
+    "mklink/mux_watch.py": {
+      "base_sha256": "11b81faa272dd7c57e2eb0a96b6d64d4c206cc7726db7a964df531179d768258",
+      "server_sha256": "beffeb5a64bd6974067d506f92bb44a50e46567778d7e3669518fe9e0c9c1855"
     }
   }
 }

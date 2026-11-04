@@ -10,8 +10,10 @@ import base64
 from collections import deque
 import hashlib
 from pathlib import Path
+import struct
 import threading
 import time
+import zlib
 
 from mklink.bridge import MKLinkSerialBridge
 from mklink._types import DeviceState
@@ -49,10 +51,17 @@ class _FifoRLock:
 
 
 class WirelessLink:
-    def __init__(self, rpc, node_id, *, owner='Mklink wireless target', read_window_cap=None):
+    def __init__(self, rpc, node_id, *, owner='Mklink wireless target', read_window_cap=None, pull_rpc=None):
         if len(node_id) != 12 or any(c not in '0123456789abcdef' for c in node_id):
             raise ValueError('Exact S3 device identity required')
         self.rpc = rpc
+        self.pull_rpc = pull_rpc
+        self.duplex = False
+        self.zlib_pull = False
+        self.pull_native_bytes = self.pull_encoded_bytes = self.compressed_pulls = 0
+        self.pulling = False
+        self.pull_sequence = 0
+        self.open_sequence = None
         self.read_window_cap = read_window_cap
         self.node_id = node_id
         self.owner = owner
@@ -63,6 +72,7 @@ class WirelessLink:
         self.poisoned = False
         self.opened = False
         self.renewed = 0
+        self.stream_renews_lease = False
         self.recent_rpc = deque(maxlen=8)
         self.read_limit_supported=False;self.read_max=1024;self.file_chunk=1024
         self.rpc_samples={};self.accepted_native_bytes=0;self.received_native_bytes=0;self.staged_file_bytes=0
@@ -100,6 +110,9 @@ class WirelessLink:
                 self.close()
                 raise RuntimeError('Native stream requires compatible S3 firmware and an idle V4')
             self.generation = state['generation']
+            self.stream_renews_lease = state.get('stream_renews_lease') is True
+            self.duplex = self.pull_rpc is not None and state.get('independent_read_sequence') is True
+            self.zlib_pull = self.duplex and state.get('zlib_pull_supported') is True
             self.sequence = state['next_sequence']
             self.read_limit_supported=state.get('read_limit_supported') is True
             if self.read_limit_supported:
@@ -115,13 +128,18 @@ class WirelessLink:
             self.file_chunk=state.get('file_chunk_max',1024)
             if type(self.file_chunk) is not int or not 1<=self.file_chunk<=2048:raise ValueError('Invalid negotiated file window')
 
+    def renew_if_due(self):
+        with self.lock:
+            if self.lease and time.monotonic() - self.renewed > 3:
+                started = time.monotonic()
+                self.rpc('control.renew', {'lease_token': self.lease})
+                self.renewed = started
+
     def call(self, method, params=None):
         with self.lock:
             if not self.lease:
                 raise RuntimeError('No wireless target lease')
-            if time.monotonic() - self.renewed > 3:
-                self.rpc('control.renew', {'lease_token': self.lease})
-                self.renewed = time.monotonic()
+            self.renew_if_due()
             started=time.monotonic()
             try:
                 result=self.rpc(method, dict(params or {}, lease_token=self.lease))
@@ -129,32 +147,108 @@ class WirelessLink:
                 self._timing(method,started,False)
                 raise
             self._timing(method,started,True)
+            if self.stream_renews_lease and method in ('probe.stream.open', 'probe.stream.read', 'probe.stream.write', 'probe.stream.close'):
+                self.renewed = started
             return result
 
-    def stream(self, action, data=None):
+    def pull(self):
+        with self.lock:
+            if self.poisoned or not self.opened or not self.lease or self.pulling:
+                raise ConnectionError('Independent read requires one healthy stream reader')
+            self.renew_if_due()
+            self.pull_sequence += 1
+            # An independently delivered STOP cannot be overtaken by a stale read from a previous open.
+            limit = min(8192, self.read_max)
+            params = dict(lease_token=self.lease, generation=self.generation, open_sequence=self.open_sequence,
+                          sequence=self.pull_sequence, max_bytes=limit)
+            if self.zlib_pull:
+                params['accept_zlib'] = True
+            self.pulling = True
+        started = time.monotonic()
+        try:
+            result = self.pull_rpc('probe.stream.pull', params)
+            compressed = 'reply_zlib_base64' in result
+            if compressed:
+                size = result.get('uncompressed_bytes')
+                if not self.zlib_pull or 'reply_base64' in result or type(size) is not int or not 1 <= size <= limit:
+                    raise ConnectionError('Invalid compressed read envelope')
+                encoded = base64.b64decode(result['reply_zlib_base64'], validate=True)
+                if not 0 < len(encoded) < size:
+                    raise ConnectionError('Invalid compressed read size')
+                decoder = zlib.decompressobj()
+                reply = decoder.decompress(encoded, size + 1)
+                if len(reply) != size or not decoder.eof or decoder.unused_data or decoder.unconsumed_tail:
+                    raise ConnectionError('Incomplete or oversized compressed read')
+            else:
+                reply = encoded = base64.b64decode(result['reply_base64'], validate=True)
+            with self.lock:
+                if self.poisoned or result['generation'] != self.generation or len(reply) > limit:
+                    raise ConnectionError('Invalid independent read response')
+                self.received_native_bytes += len(reply)
+                self.pull_native_bytes += len(reply)
+                self.pull_encoded_bytes += len(encoded)
+                self.compressed_pulls += compressed
+                if self.stream_renews_lease:
+                    self.renewed = max(self.renewed, started)
+                self._timing('probe.stream.pull', started, True)
+            if time.monotonic()-started > .5:
+                from mklink.connection_diagnostics import event
+                event('remote.slow_read', bytes=len(reply), rpc_ms=round((time.monotonic()-started)*1000))
+            return reply
+        except Exception as error:
+            with self.lock:
+                self.poisoned = True
+                self._timing('probe.stream.pull', started, False)
+            raise ConnectionError('Independent read failed; no replay') from error
+        finally:
+            with self.lock:
+                self.pulling = False
+
+    def stream(self, action, data=None, *, interactive=False):
+        if action == 'read' and interactive and self.duplex:
+            return self.pull()
+        submitted = time.monotonic()
         with self.lock:
             if self.poisoned:
                 raise ConnectionError('Native stream outcome unknown; no replay')
+            if action == 'close' and self.pulling:
+                raise ConnectionError('Native reader still owns IO')
             params = dict(generation=self.generation, sequence=self.sequence)
-            if action=='read' and self.read_limit_supported:params['max_bytes']=self.read_max
+            # A long radio response blocks the sole MUX reader, including its heartbeat.
+            limit = min(self.read_max, 4096) if interactive else self.read_max
+            if action=='read' and self.read_limit_supported:params['max_bytes']=limit
             if data is not None:
                 if not 1 <= len(data) <= 1024:
                     raise ValueError('Native byte chunk must contain 1..1024 bytes')
                 params['request_base64'] = base64.b64encode(data).decode('ascii')
             self.sequence += 1
             try:
+                started = time.monotonic()
                 result = self.call('probe.stream.' + action, params)
                 if result['generation'] != self.generation:
                     raise ConnectionError('V4 generation changed during native stream')
                 if data is not None and result['accepted_bytes'] != len(data):
                     raise ConnectionError('Partial native write; outcome unknown')
                 reply = base64.b64decode(result['reply_base64'], validate=True)
-                if len(reply) > (self.read_max if action=='read' else 1024):
+                if len(reply) > (limit if action=='read' else 1024):
                     raise ConnectionError('Oversized native stream response')
+                if data and len(data) >= 20 and data[:5] == b'MLX1\x01' and data[5] in (2, 0x31):
+                    from mklink.connection_diagnostics import event
+                    epoch, request = struct.unpack_from('<II', data, 8)
+                    event('remote.mux_write', opcode=data[5], epoch=epoch, request=request,
+                          queue_ms=round((started-submitted)*1000), rpc_ms=round((time.monotonic()-started)*1000),
+                          usb_start_us=result.get('usb_start_us'), usb_done_us=result.get('usb_done_us'),
+                          pull_native_bytes=self.pull_native_bytes, pull_encoded_bytes=self.pull_encoded_bytes,
+                          compressed_pulls=self.compressed_pulls)
+                elif interactive and time.monotonic()-started > .5:
+                    from mklink.connection_diagnostics import event
+                    event('remote.slow_read', bytes=len(reply), rpc_ms=round((time.monotonic()-started)*1000))
                 self.received_native_bytes+=len(reply)
                 if data is not None:self.accepted_native_bytes+=len(data)
                 if action == 'open':
                     self.opened = True
+                    self.open_sequence = params['sequence']
+                    self.pull_sequence = 0
                 elif action == 'close':
                     self.opened = False
                 return reply
@@ -221,6 +315,7 @@ class WirelessSerial:
         self.buffer = bytearray()
         self.is_open = False
         self.safe_close = lambda: True
+        self.mux_active = lambda: False
         link.stream('open')
         self.is_open = True
 
@@ -232,7 +327,7 @@ class WirelessSerial:
         if not self.is_open:
             raise ConnectionError('Wireless stream closed')
         if not self.buffer:
-            self.buffer.extend(self.link.stream('read'))
+            self.buffer.extend(self.link.stream('read', interactive=True) if self.mux_active() else self.link.stream('read'))
         result = bytes(self.buffer[:size])
         del self.buffer[:size]
         return result
@@ -278,6 +373,7 @@ class WirelessBridge(MKLinkSerialBridge):
                            HilFileLock('transport_mklink-rpc_' + link.node_id, lease_s=60)]
         self._held_locks = []
         self._endpoint = None
+        self._pull_endpoint = None
         self._lease_stop = threading.Event()
         self._lease_thread = None
         self.link = link
@@ -310,17 +406,24 @@ class WirelessBridge(MKLinkSerialBridge):
             self._endpoint.open()
         self.link.acquire()
         def renew():
-            while not self._lease_stop.wait(2):
+            next_renew = time.monotonic() + 2
+            while not self._lease_stop.wait(.2 if self.link.duplex else 2):
                 try:
-                    if not all(lock.renew() for lock in self._held_locks):
-                        raise ConnectionError('Wireless hardware ownership lost')
-                    self.link.call('get_probe_transport')
+                    if time.monotonic() >= next_renew:
+                        if not all(lock.renew() for lock in self._held_locks):
+                            raise ConnectionError('Wireless hardware ownership lost')
+                        self.link.renew_if_due()
+                        next_renew = time.monotonic() + 2
+                    mux = self._mux
+                    if self.link.duplex and mux is not None and mux.watch_running:
+                        mux.tick()
                 except Exception:
                     self.link.poisoned = True
                     return
         self._lease_thread = threading.Thread(target=renew, daemon=True)
         self._lease_thread.start()
         self._serial = WirelessSerial(self.link)
+        self._serial.mux_active = lambda: self._mux is not None
         self._ctx.state = DeviceState.CONNECTING
         self._running = True
         self._reader_thread = threading.Thread(target=self._reader_loop, daemon=True)
@@ -361,6 +464,8 @@ class WirelessBridge(MKLinkSerialBridge):
             # a fully stopped local owner after an explicit physical recovery.
             self.last_connect_error = 'Remote session quarantined; explicit USB recovery required'
         finally:
+            if self._pull_endpoint:
+                self._pull_endpoint.close()
             if self._endpoint:
                 self._endpoint.close()
             for lock in reversed(self._held_locks):
@@ -372,8 +477,11 @@ class WirelessBridge(MKLinkSerialBridge):
     def from_node(cls, node):
         from mklink_remote.s3_rpc import Endpoint
         endpoint = Endpoint(node)
-        bridge = cls(WirelessLink(endpoint.rpc, node['node_id'], owner='MKLink shared backend', read_window_cap=4096 if node['transport']=='ble' else None))
+        pull_endpoint = None if node['transport']=='ble' else Endpoint(node)
+        bridge = cls(WirelessLink(endpoint.rpc, node['node_id'], owner='MKLink shared backend', read_window_cap=4096 if node['transport']=='ble' else None,
+                                  pull_rpc=pull_endpoint.rpc if pull_endpoint else None))
         bridge._endpoint = endpoint
+        bridge._pull_endpoint = pull_endpoint
         return bridge
 
     def upload_algorithm(self, algorithm):

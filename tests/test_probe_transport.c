@@ -38,11 +38,18 @@ int main(void){
     probe_transport_t buffered={0};uint8_t large[PROBE_READ_MAX];uncertain=false;
     assert(probe_transport_bind(&buffered,&d,&b));
     assert(probe_transport_stream(&buffered,owner,1,buffered.generation,PROBE_STREAM_OPEN,NULL,0,NULL,0,&written)==PROBE_OK);
+    assert(probe_transport_pull(&buffered,owner,10,buffered.generation,1,large,sizeof large,&written)==PROBE_OK);
+    assert(probe_transport_pull(&buffered,owner,10,buffered.generation,1,large,sizeof large,&written)==PROBE_DUPLICATE);
+    assert(probe_transport_pull(&buffered,owner,11,buffered.generation,99,large,sizeof large,&written)==PROBE_STALE);
     previous_calls=calls;
     assert(probe_transport_stream(&buffered,owner,2,buffered.generation,PROBE_STREAM_READ,NULL,0,large,PROBE_READ_MAX+1,&written)==PROBE_INVALID);
     assert(probe_transport_stream(&buffered,owner,2,buffered.generation,PROBE_STREAM_WRITE,payload,PROBE_PAYLOAD_MAX+1,NULL,0,&written)==PROBE_INVALID);
     assert(calls==previous_calls);
     assert(probe_transport_stream(&buffered,owner,2,buffered.generation,PROBE_STREAM_READ,NULL,0,large,sizeof large,&written)==PROBE_OK);
     assert(probe_transport_stream(&buffered,owner,3,buffered.generation,PROBE_STREAM_CLOSE,NULL,0,NULL,0,&written)==PROBE_OK);
-    puts("PASS: V4 descriptor guard, bounded4KiB read/1KiB write, generation/sequence and quarantine");return 0;
+    assert(probe_transport_stream(&buffered,owner,4,buffered.generation,PROBE_STREAM_OPEN,NULL,0,NULL,0,&written)==PROBE_OK);
+    assert(probe_transport_pull(&buffered,owner,11,buffered.generation,1,large,sizeof large,&written)==PROBE_STALE);
+    assert(probe_transport_pull(&buffered,owner,1,buffered.generation,4,large,sizeof large,&written)==PROBE_OK);
+    assert(probe_transport_stream(&buffered,owner,5,buffered.generation,PROBE_STREAM_CLOSE,NULL,0,NULL,0,&written)==PROBE_OK);
+    puts("PASS: V4 descriptor, bounded transfer, independent read sequence and quarantine");return 0;
 }

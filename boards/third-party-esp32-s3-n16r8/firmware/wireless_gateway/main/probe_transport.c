@@ -65,8 +65,8 @@ probe_result_t probe_transport_exchange(probe_transport_t *t, const char *contro
 void probe_transport_reconcile_owner(probe_transport_t *t,const char *owner) {
     if(t&&t->stream_active&&(!owner||strcmp(owner,t->controller)))t->dirty=true;
 }
-probe_result_t probe_transport_stream(probe_transport_t *t,const char *owner,uint32_t seq,uint32_t generation,
-                                     probe_stream_op_t op,const uint8_t *in,size_t n,uint8_t *out,size_t cap,size_t *written) {
+static probe_result_t stream(probe_transport_t *t,const char *owner,uint32_t seq,uint32_t generation,
+                             uint32_t read_session,probe_stream_op_t op,const uint8_t *in,size_t n,uint8_t *out,size_t cap,size_t *written) {
     if(written)*written=0;
     if(!t||!owner||strlen(owner)!=32||!seq||!written||op>PROBE_STREAM_CLOSE||
        n>PROBE_PAYLOAD_MAX||cap>PROBE_READ_MAX||
@@ -78,15 +78,26 @@ probe_result_t probe_transport_stream(probe_transport_t *t,const char *owner,uin
     if(t->stream_active&&strcmp(owner,t->controller))return PROBE_NOT_READY;
     if(op==PROBE_STREAM_OPEN?t->stream_active:!t->stream_active)return PROBE_NOT_READY;
     if(strcmp(owner,t->controller)){strcpy(t->controller,owner);t->last_sequence=0;}
-    if(seq<=t->last_sequence)return PROBE_DUPLICATE;
-    t->last_sequence=seq;
+    if(read_session && read_session!=t->open_sequence)return PROBE_STALE;
+    uint32_t *last=read_session?&t->last_pull:&t->last_sequence;
+    if(seq<=*last)return PROBE_DUPLICATE;
+    *last=seq;
     probe_result_t rc=t->backend.stream(t->backend.context,op,in,n,out,cap,written);
     if(rc==PROBE_OUTCOME_UNKNOWN||generation!=t->generation||*written>cap){
         t->dirty=true;*written=0;return PROBE_OUTCOME_UNKNOWN;
     }
     if(rc==PROBE_OK){
-        if(op==PROBE_STREAM_OPEN)t->stream_active=true;
+        if(op==PROBE_STREAM_OPEN){t->stream_active=true;t->open_sequence=seq;t->last_pull=0;}
         if(op==PROBE_STREAM_CLOSE)t->stream_active=false;
     }
     return rc;
+}
+probe_result_t probe_transport_stream(probe_transport_t *t,const char *owner,uint32_t seq,uint32_t generation,
+                                     probe_stream_op_t op,const uint8_t *in,size_t n,uint8_t *out,size_t cap,size_t *written){
+    return stream(t,owner,seq,generation,0,op,in,n,out,cap,written);
+}
+probe_result_t probe_transport_pull(probe_transport_t *t,const char *owner,uint32_t seq,uint32_t generation,
+                                   uint32_t open_sequence,uint8_t *out,size_t cap,size_t *written){
+    if(!open_sequence){if(written)*written=0;return PROBE_INVALID;}
+    return stream(t,owner,seq,generation,open_sequence,PROBE_STREAM_READ,NULL,0,out,cap,written);
 }

@@ -144,7 +144,15 @@
          self._write = write
          self._condition = threading.Condition()
          self._commands = command_lock or threading.RLock()
-@@ -109,7 +110,7 @@
+@@ -61,6 +62,7 @@
+         self._pending = None
+         self._reply = None
+         self._error = None
++        self._waiting_for_slot = False
+         self._next_id = 0
+         self.epoch = 0
+         self.nonce = secrets.token_bytes(8)
+@@ -109,7 +111,7 @@
          if self._next_id > 0xffffffff:
              raise MuxError('Request IDs exhausted; close and create a new session')
          req = self._next_id
@@ -153,6 +161,28 @@
          self._reply = None
          wire = packet(op, 0 if op == 1 else self.epoch, req,
                        (self.nonce if 0x10 <= op < 0x40 else b'') + payload)
+@@ -125,8 +127,12 @@
+     def request(self, op, payload=b''):
+         with self._commands, self._condition:
+             self._check()
+-            while self._pending:
+-                self._wait()
++            self._waiting_for_slot = True
++            try:
++                while self._pending:
++                    self._wait()
++            finally:
++                self._waiting_for_slot = False
+             self._send(op, payload)
+             while self._pending:
+                 self._wait()
+@@ -167,5 +173,5 @@
+                 return
+             if self._pending and time.monotonic() >= self._pending[2]:
+                 self._expire_pending('response')
+-            elif self.ready and not self._pending and self._reply is None and time.monotonic()-self._last_command >= 1:
++            elif not self._waiting_for_slot and self.ready and not self._pending and self._reply is None and time.monotonic()-self._last_command >= 1:
+                 self._send(2, b'', heartbeat=True)
 --- a/mklink/probe_volumes.py
 +++ b/mklink/probe_volumes.py
 @@ -99,6 +99,8 @@
@@ -373,3 +403,297 @@
                  while job['state'] not in ('succeeded', 'failed', 'unknown'):
                      time.sleep(.1)
                      job = client.job_status(job['job_id'])
+--- a/mklink/dump_benchmark.py
++++ b/mklink/dump_benchmark.py
+@@ -60,40 +60,63 @@
+     count = 0
+     assembler = DumpSampleAssembler([n for _, n in regions], ordered=True)
+     # Keep only interval counts, not millions of raw sample objects.
++    deadline = None
++    cutoff_us = round(duration * 1e6)
++    past_window = 0
++    ahead_before_stop = 0
++
++    def consume(frames, *, tail=False):
++        nonlocal first_seen, first, last, last_complete, count, assembler, deadline, past_window, ahead_before_stop
++        for frame in frames:
++            check_capture_cancelled(cancelled)
++            if isinstance(frame, PackedWatchSample):
++                ts = frame.timestamp_us
++            else:
++                payloads = assembler.feed(frame)
++                if payloads is None:
++                    continue
++                ts = assembler.timestamp_us
++                assembler = DumpSampleAssembler([n for _, n in regions], ordered=True)
++            if last_complete is not None and ts <= last_complete:
++                raise RuntimeError('mem_dump non-increasing timestamp')
++            last_complete = ts
++            if first_seen is None:
++                first_seen = ts
++                deadline = time.monotonic() + duration
++            age = ts - first_seen
++            if age >= cutoff_us:
++                if tail:
++                    past_window += 1
++                else:
++                    ahead_before_stop += 1
++                continue
++            if age < 200000:
++                continue
++            if last is not None:
++                intervals[ts-last] += 1
++            else:
++                first = ts
++            last = ts
++            count += 1
++
++    collect_tail = False
+     try:
+         session.start()
+         deadline = time.monotonic() + 2.0
+         while time.monotonic() < deadline:
+             check_capture_cancelled(cancelled)
+             frames = session.read_frames(max_bytes=262144)
+-            for frame in frames:
+-                check_capture_cancelled(cancelled)
+-                if isinstance(frame, PackedWatchSample):
+-                    ts = frame.timestamp_us
+-                else:
+-                    payloads = assembler.feed(frame)
+-                    if payloads is None:
+-                        continue
+-                    ts = assembler.timestamp_us
+-                    assembler = DumpSampleAssembler([n for _, n in regions], ordered=True)
+-                if last_complete is not None and ts <= last_complete:
+-                    raise RuntimeError('mem_dump non-increasing timestamp')
+-                last_complete = ts
+-                if first_seen is None:
+-                    first_seen = ts
+-                    deadline = time.monotonic() + duration
+-                if ts - first_seen < 200000:
+-                    continue
+-                if last is not None:
+-                    intervals[ts-last] += 1
+-                else:
+-                    first = ts
+-                last = ts
+-                count += 1
+-            if not frames:
++            if frames:
++                consume(frames)
++            else:
+                 time.sleep(.0005)
++        collect_tail = first_seen is not None
+     finally:
+-        session.stop()
++        before_stop = count
++        if collect_tail:
++            session.stop(on_watch_tail=lambda frames: consume(frames, tail=True))
++        else:
++            session.stop()
+     stats = session.stats
+     if any(stats.get(k, 0) for k in ('parser_crc_errors','parser_dropped_frames',
+                                    'parser_dropped_bytes','firmware_flagged_frames')):
+@@ -111,6 +134,8 @@
+     return {'clock_hz': device._bridge._ctx.swd_clock_hz,
+             'duration_s': duration, 'warmup_us': 200000, 'period_s': period,
+             'regions': [{'address': hex(a), 'size': n} for a,n in regions],
++            'samples_before_stop': before_stop, 'tail_samples_in_window': count-before_stop,
++            'tail_samples_after_window': past_window, 'prestop_samples_after_window': ahead_before_stop,
+             'samples': count, 'sample_hz': hz, 'payload_bytes_per_second': hz*size,
+             'median_interval_us': quantile(.5), 'p99_interval_us': quantile(.99),
+             'max_interval_us': max(intervals), 'integrity': stats,
+--- a/mklink/dump_memory.py
++++ b/mklink/dump_memory.py
+@@ -188,6 +188,38 @@
+ _RETRY = object()
+
+ 
++class DumpStartupEcho:
++    """Remove one exact generated command echo, only at stream startup.
++
++    Keep arbitrary preambles, later echoes and all damaged bytes observable.
++    Candidate buffering is bounded by the generated REPL command length.
++    """
++    def __init__(self, command: str):
++        echo = command.encode('ascii')
++        self.candidates = tuple(sorted({
++            echo + ending + separator + prompt
++            for ending in (b'\n', b'\r\n')
++            for separator in (b'', b'\n', b'\r\n')
++            for prompt in (b'', b'>>>', b'>>> ')
++        }, key=len, reverse=True))
++        self.pending = bytearray()
++        self.control_bytes = 0
++        self.done = False
++
++    def feed(self, data: bytes) -> bytes:
++        if self.done:
++            return data
++        self.pending.extend(data)
++        raw = bytes(self.pending)
++        if any(candidate.startswith(raw) for candidate in self.candidates):
++            return b''
++        prefix = next((candidate for candidate in self.candidates if raw.startswith(candidate)), b'')
++        self.control_bytes = len(prefix)
++        self.pending.clear()
++        self.done = True
++        return raw[len(prefix):]
++
++
+ class DumpMemoryParser:
+     """Streaming binary parser for dump_memory frames (OLD + B1).
+
+@@ -208,7 +240,8 @@
+         "block_crc_ok": bool  (B1 region data payload CRC result)
+     """
+
+-    def __init__(self, region_sizes: list[int] | None = None):
++    def __init__(self, region_sizes: list[int] | None = None, *, startup_command: str | None = None):
++        self._startup = DumpStartupEcho(startup_command) if startup_command else None
+         self._buf = bytearray()
+         self._region_sizes = region_sizes or []
+         self._expected_count = len(self._region_sizes)
+@@ -217,6 +250,10 @@
+         self._crc_errors: int = 0
+
+     @property
++    def startup_control_bytes(self) -> int:
++        return self._startup.control_bytes if self._startup else 0
++
++    @property
+     def dropped_bytes(self) -> int:
+         return self._dropped_bytes
+
+@@ -230,6 +267,8 @@
+
+     def feed(self, data: bytes) -> list[dict]:
+         """Feed raw bytes, return list of parsed frame dicts."""
++        if self._startup is not None:
++            data = self._startup.feed(data)
+         self._buf.extend(data)
+         frames: list[dict] = []
+         while True:
+@@ -1159,6 +1198,7 @@
+                 return
+
+         command = build_dump_mem_command(self.region_pairs, self.period)
++        self.parser = DumpMemoryParser(region_sizes=[n for _, n in self.region_pairs], startup_command=command)
+         _enter_dump_stream(self.bridge)
+         try:
+             self.bridge._write_raw((command + "\n").encode("utf-8"))
+@@ -1231,7 +1271,7 @@
+                 self._complete_samples += 1
+         return samples
+
+-    def stop(self) -> None:
++    def stop(self, *, on_watch_tail=None):
+         if self._write_pending is not None:
+             future = self._write_pending[3]
+             self._write_pending = None
+@@ -1241,6 +1281,9 @@
+             return
+         if self._mux_watch is not None:
+             try:
++                if on_watch_tail is not None:
++                    on_watch_tail(self._mux_watch.stop(drain_tail=True, packed=self.packed_frames))
++                    return
+                 self._mux_watch.stop()
+             finally:
+                 self.started = False
+@@ -1262,7 +1305,7 @@
+                     'parser_dropped_frames': self._mux_watch.gaps,
+                     'firmware_read_errors': self._mux_watch.read_errors,
+                     'parser_crc_errors': 0, 'firmware_flagged_frames': 0, 'firmware_sample_drop_flags': 0}
+-        return {
++        stats = {
+             "protocol_frames": self._protocol_frames,
+             "complete_samples": self._complete_samples,
+             "parser_dropped_bytes": self.parser.dropped_bytes,
+@@ -1271,6 +1314,9 @@
+             "firmware_flagged_frames": self._firmware_flagged_frames,
+             "firmware_sample_drop_flags": self._firmware_sample_drop_flags,
+         }
++        if self.parser.startup_control_bytes:
++            stats['startup_control_bytes'] = self.parser.startup_control_bytes
++        return stats
+
+ 
+ def decode_frame_to_points(
+--- a/mklink/mux_watch.py
++++ b/mklink/mux_watch.py
+@@ -48,20 +48,24 @@
+         # Negotiate units only after the real firmware capabilities are known.
+         if not getattr(self.transport, 'capabilities', 0) & 8:
+             raise RuntimeError('SuperWatch requires the matching grouped-sampling firmware; update the probe firmware and host together')
+-        self.transport.drain(0x41, 255)
+         body = struct.pack('<IB', self.period, len(self.parts))
+         body += b''.join(struct.pack('<IB', address, size) for _, address, size in self.parts)
+         with self.transport._commands:
++            self.transport.drain(0x41, 255)
+             self.transport.request(0x32, body)
+             self.transport.watch_running = True
+ 
+-    def read_frames(self, *, packed=False):
++    def read_frames(self, *, packed=False, max_bytes=16384):
+         result = []
+         now = time.monotonic()
+         # Keep decoding/publication bursts below the bounded RX queue's time
+         # budget. Draining 64 KiB expands into thousands of Python sample
+         # objects and can stall the next drain long enough to overflow it.
+-        for event in self.transport.drain(0x41, 255, max_bytes=16384):
++        # At the deadline inspect one snapshot of the bounded queue before declaring silence.
++        if (self._read_failure_since is not None
++                and now - self._read_failure_since >= self._read_failure_timeout):
++            max_bytes = None
++        for event in self.transport.drain(0x41, 255, max_bytes=max_bytes):
+             generation = getattr(event, 'reset_generation', None)
+             if generation != self._reset_generation:
+                 self._pending = []
+@@ -83,8 +87,14 @@
+                 self._pending = []
+                 self.gaps += 1
+                 self.read_errors += 1
++                error_timestamp = struct.unpack_from('<I', event, 2)[0]
+                 if self._read_failure_since is None:
+                     self._read_failure_since = now
++                    self._first_error_timestamp = error_timestamp
++                    self._consecutive_read_errors = 0
++                self._consecutive_read_errors += 1
++                self._last_error_timestamp = error_timestamp
++                self._last_error_part = index
+                 # Firmware retains the subscription. Do not replay commands,
+                 # reset the target, lower its clock or publish stale/zero values.
+                 continue
+@@ -134,10 +144,15 @@
+         if (self._read_failure_since is not None
+                 and now - self._read_failure_since >= self._read_failure_timeout
+                 and not result):
++            device_span = (self._last_error_timestamp - self._first_error_timestamp) & 0xffffffff
++            failures = self._consecutive_read_errors
++            address = self.parts[self._last_error_part][1]
++            detail = ('target read failed continuously (status 5)' if device_span >= self._read_failure_timeout * 1e6
++                      else 'delivery gap after a target read error; cannot confirm reads failed continuously (status 5)')
+             raise RuntimeError(
+-                f'SuperWatch target read failed continuously (status 5); '
+-                f'no valid sample for {self._read_failure_timeout:g}s. Capture stopped; '
+-                'check the target connection, selected addresses and sampling debug speed.'
++                f'SuperWatch {detail}; {failures} reported error(s) spanning {device_span} device us, '
++                f'last address 0x{address:08X}. No complete sample for {now-self._read_failure_since:.2f} host s. '
++                'Capture stopped; check the target connection, selected addresses and sampling debug speed.'
+             )
+         return result
+ 
+@@ -163,7 +178,10 @@
+             future.set_exception(exc)
+             raise
+ 
+-    def stop(self):
++    def stop(self, *, drain_tail=False, packed=False):
+         with self.transport._commands:
+             self.transport.request(0x31)
+             self.transport.watch_running = False
++            if drain_tail:
++                # STOP acknowledged; consume one bounded queue snapshot before a new watch starts.
++                return self.read_frames(packed=packed, max_bytes=None)

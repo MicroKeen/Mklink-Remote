@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- The shared Remote backend and S3 gateway negotiate independent Wi-Fi sample reads and optional lossless compression. Heartbeats and STOP can use the control connection during a read.
+- SuperWatch checks already-queued samples at the read-error deadline. Dump measurements separate the startup echo from parser errors and account for in-window samples delivered at STOP.
+- The single-channel 800 Hz STA result does not extend to eight channels. See the [wireless stress results](docs/TESTING.md#retained-gateway-stress-results) for tested workloads and limits.
+
 ## 0.8.0 — source publication
 
 - Remote-owned wireless/server adapter; original MKLink skill and MCP remain unchanged.

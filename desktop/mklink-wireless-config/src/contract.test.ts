@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { validateDraft, DeviceConfig, Status, wifiQr, type SaveDraft } from './contract';
-const valid: SaveDraft={expected_revision:1,change_id:'test-change',node_name:'节点',wifi_ssid:'工作网络',gateway_url:'wss://hil.example',wifi_password:'12345678',network_mode:'AP',ap_ssid:'MklinkRemote-5ABE64',gateway_enabled:false,bench_id:'s3-test'};
+const valid: SaveDraft={expected_revision:1,change_id:'test-change',node_name:'节点',wifi_ssid:'工作网络',gateway_url:'wss://hil.example',wifi_password:'12345678',network_mode:'AP',ap_ssid:'MklinkRemote-TEST',gateway_enabled:false,bench_id:'s3-test'};
 describe('configuration boundary',()=>{
   it('counts UTF-8 bytes for firmware fields',()=>{
     expect(validateDraft({...valid,wifi_ssid:'中'.repeat(11)})).toContain('32 字节');

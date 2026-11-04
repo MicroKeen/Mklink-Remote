@@ -63,6 +63,11 @@ python -m venv .remote-venv
 .remote-venv/Scripts/python "$app/tools/build_remote_server.py" --staged .deps/remote-staged --assets "$sdk/mklink" --output .deps/remote-build
 ```
 
+To check STOP scheduling, measurement tail accounting and startup echo handling
+without hardware, run `tests/run_staged_mux_slot.py`, `tests/run_staged_mux_tail.py`,
+`tests/run_staged_watch_read_error.py` and `tests/run_staged_dump_echo.py` with the remote Python environment and
+`PYTHONPATH` set to the absolute path of `.deps/remote-staged`.
+
 Use a fresh staging directory if it already exists; the script intentionally refuses to overwrite an existing stage. Both `builtin_flm/manifest.json` and `builtin_packs/manifest.json` must exist in the supplied SDK assets.
 
 Prepare the CLI resource before the full Tauri bundle:

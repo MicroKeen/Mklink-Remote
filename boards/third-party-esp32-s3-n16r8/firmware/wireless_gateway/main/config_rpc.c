@@ -11,6 +11,7 @@
 #include "esp_random.h"
 #include "esp_system.h"
 #include "esp_heap_caps.h"
+#include "miniz.h"
 #include "esp_psram.h"
 #include "esp_timer.h"
 #include "esp_wifi.h"
@@ -38,6 +39,17 @@ static control_lease_t lease;
 static probe_transport_t probe;
 /* Protected by rpc_lock; these are CPU workspaces, never USB DMA buffers. */
 static struct {uint8_t input[PROBE_PAYLOAD_MAX],output[PROBE_READ_MAX];unsigned char encoded[((PROBE_READ_MAX+2)/3)*4+1];} *stream_workspace;
+static struct {tdefl_compressor codec; uint8_t out[8192];} *pull_zip;
+
+/* Independent DEFLATE streams keep a lost RPC from changing the next block's dictionary. */
+static size_t compress_pull(const uint8_t *data,size_t bytes){
+    if(bytes<512||bytes>sizeof pull_zip->out)return 0;
+    if(!pull_zip)pull_zip=heap_caps_malloc(sizeof *pull_zip,MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT);
+    if(!pull_zip||tdefl_init(&pull_zip->codec,NULL,NULL,TDEFL_WRITE_ZLIB_HEADER|TDEFL_GREEDY_PARSING_FLAG|1)!=TDEFL_STATUS_OKAY)return 0;
+    size_t consumed=bytes,produced=bytes-bytes/8;
+    tdefl_status rc=tdefl_compress(&pull_zip->codec,data,&consumed,pull_zip->out,&produced,TDEFL_FINISH);
+    return rc==TDEFL_STATUS_DONE&&consumed==bytes?produced:0;
+}
 static SemaphoreHandle_t config_lock, rpc_lock;
 static nvs_handle_t storage;
 static char device_id[13];
@@ -229,7 +241,9 @@ static esp_err_t persist(const node_settings_t *next) {
     }
     return err;
 }
-static cJSON *dispatch(const cJSON *request, bool serial) {
+typedef enum {RPC_SERIAL,RPC_HTTP,RPC_BLE} rpc_transport_t;
+static cJSON *dispatch(const cJSON *request, rpc_transport_t transport) {
+    bool serial=transport==RPC_SERIAL;
     const cJSON *id = cJSON_GetObjectItemCaseSensitive(request, "id"),
                 *version = cJSON_GetObjectItemCaseSensitive(request, "v"),
                 *method = cJSON_GetObjectItemCaseSensitive(request, "method"),
@@ -263,6 +277,9 @@ static cJSON *dispatch(const cJSON *request, bool serial) {
         cJSON_AddStringToObject(result,"stream_framing","mklink_native_bytes_v1");
         cJSON_AddBoolToObject(result,"storage_ready",v4_storage_ready());
         cJSON_AddBoolToObject(result,"read_limit_supported",true);
+        cJSON_AddBoolToObject(result,"stream_renews_lease",true);
+        cJSON_AddBoolToObject(result,"independent_read_sequence",true);
+        cJSON_AddBoolToObject(result,"zlib_pull_supported",transport==RPC_HTTP);
         cJSON_AddNumberToObject(result,"max_read_payload",4096); /* Legacy clients retain their4KiB guard. */
         cJSON_AddNumberToObject(result,"bulk_read_max",PROBE_READ_MAX);
         cJSON_AddBoolToObject(result,"usb_metrics_supported",true);
@@ -429,8 +446,9 @@ static cJSON *dispatch(const cJSON *request, bool serial) {
     } else if (!strncmp(m,"probe.stream.",13)) {
         if(!authorized(p))return failure(id,423,"Acquire control before native byte transport");
         probe_stream_op_t op;
+        bool pull=!strcmp(m,"probe.stream.pull");
         if(!strcmp(m,"probe.stream.open"))op=PROBE_STREAM_OPEN;
-        else if(!strcmp(m,"probe.stream.read"))op=PROBE_STREAM_READ;
+        else if(pull||!strcmp(m,"probe.stream.read"))op=PROBE_STREAM_READ;
         else if(!strcmp(m,"probe.stream.write"))op=PROBE_STREAM_WRITE;
         else if(!strcmp(m,"probe.stream.close"))op=PROBE_STREAM_CLOSE;
         else if(!strcmp(m,"probe.stream.abort")){
@@ -454,19 +472,37 @@ static cJSON *dispatch(const cJSON *request, bool serial) {
                 return failure(id,400,"Read limit must contain1..32768 bytes");
             capacity=(size_t)limit->valuedouble;
         }
+        uint32_t opened=0;
+        if(pull){
+            const cJSON *field=cJSON_GetObjectItemCaseSensitive(p,"open_sequence");
+            if(!cJSON_IsNumber(field)||field->valuedouble<1||field->valuedouble>UINT32_MAX||field->valuedouble!=(uint32_t)field->valuedouble)
+                return failure(id,400,"Open stream identity required for independent read");
+            opened=(uint32_t)field->valuedouble;
+        }
         lease.busy=true;
-        probe_result_t rc=probe_transport_stream(&probe,lease.token,(uint32_t)seq->valuedouble,(uint32_t)gen->valuedouble,op,input,bytes,output,capacity,&count);
+        int64_t stream_start_us=esp_timer_get_time();
+        probe_result_t rc=pull?probe_transport_pull(&probe,lease.token,(uint32_t)seq->valuedouble,(uint32_t)gen->valuedouble,opened,output,capacity,&count):
+            probe_transport_stream(&probe,lease.token,(uint32_t)seq->valuedouble,(uint32_t)gen->valuedouble,op,input,bytes,output,capacity,&count);
+        int64_t stream_end_us=esp_timer_get_time();
         lease.busy=false;
         if(rc!=PROBE_OK)return failure(id,rc==PROBE_OUTCOME_UNKNOWN?504:409,rc==PROBE_OUTCOME_UNKNOWN?
             "Native stream outcome unknown; quarantined, no replay":"Stream state, generation or sequence rejected; no replay");
+        /* A successful sequenced operation proves the current controller is alive. */
+        lease.expires_ms=now_ms()+15000;
         unsigned char *encoded_reply=stream_workspace->encoded;size_t length=0;
         /* mbedTLS requires capacity for its terminating NUL as well as the
          * encoded bytes. The PSRAM workspace already includes that byte. */
-        if(mbedtls_base64_encode(encoded_reply,sizeof stream_workspace->encoded,&length,output,count))return failure(id,500,"Native response encoding failed; outcome unknown");
+        size_t zipped=pull&&transport==RPC_HTTP&&cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(p,"accept_zlib"))?compress_pull(output,count):0;
+        if(mbedtls_base64_encode(encoded_reply,sizeof stream_workspace->encoded,&length,zipped?pull_zip->out:output,zipped?zipped:count))return failure(id,500,"Native response encoding failed; outcome unknown");
         encoded_reply[length]=0;
-        result=cJSON_CreateObject();cJSON_AddStringToObject(result,"reply_base64",(char*)encoded_reply);
+        result=cJSON_CreateObject();cJSON_AddStringToObject(result,zipped?"reply_zlib_base64":"reply_base64",(char*)encoded_reply);
+        if(zipped)cJSON_AddNumberToObject(result,"uncompressed_bytes",count);
         cJSON_AddNumberToObject(result,"generation",probe.generation);cJSON_AddNumberToObject(result,"accepted_bytes",bytes);
         cJSON_AddBoolToObject(result,"stream_active",probe.stream_active);
+        if(op==PROBE_STREAM_WRITE){
+            cJSON_AddNumberToObject(result,"usb_start_us",(double)stream_start_us);
+            cJSON_AddNumberToObject(result,"usb_done_us",(double)stream_end_us);
+        }
     } else if (!strcmp(m, "probe.exchange")) {
         if (!authorized(p))
             return failure(id, 423, "Acquire control before probe exchange");
@@ -518,10 +554,10 @@ static cJSON *dispatch(const cJSON *request, bool serial) {
     cJSON_AddItemToObject(reply, "data", result);
     return reply;
 }
-static char *process(const char *body, bool serial) {
+static char *process(const char *body, rpc_transport_t transport) {
     cJSON *request = strstr(body, "\\u0000") ? NULL : cJSON_ParseWithOpts(body, NULL, true);
     xSemaphoreTake(rpc_lock, portMAX_DELAY);
-    cJSON *reply = dispatch(request, serial);
+    cJSON *reply = dispatch(request, transport);
     xSemaphoreGive(rpc_lock);
     char *raw = cJSON_PrintUnformatted(reply);
     cJSON_Delete(reply);
@@ -563,7 +599,7 @@ void config_button_action(int action) {
     record("BOOT temporary mode switch; saved preference retained");
     xSemaphoreGive(rpc_lock);
 }
-char *config_ble_rpc(const char *body) { return process(body, false); }
+char *config_ble_rpc(const char *body) { return process(body, RPC_BLE); }
 bool config_bind_probe(const probe_descriptor_t *d, const probe_backend_t *backend) {
     xSemaphoreTake(rpc_lock, portMAX_DELAY);
     bool ready = probe_transport_bind(&probe, d, backend);
@@ -594,7 +630,7 @@ static void serial_task(void *arg) {
             if (!overflow && used > 7 && !memchr(line, 0, used)) {
                 line[used] = 0;
                 if (!strncmp(line, "@MKCFG ", 7)) {
-                    char *reply = process(line + 7, true);
+                    char *reply = process(line + 7, RPC_SERIAL);
                     if (reply) {
                         flockfile(stdout);
                         printf("@MKCFG %s\n", reply);
@@ -650,7 +686,7 @@ static esp_err_t http_rpc(httpd_req_t *req) {
         httpd_resp_set_status(req, "400 Bad Request");
         return httpd_resp_sendstr(req, "Invalid JSON");
     }
-    char *reply = process(body, false);
+    char *reply = process(body, RPC_HTTP);
     free(body);
     if (!reply)
         return ESP_ERR_NO_MEM;
@@ -752,7 +788,7 @@ esp_err_t config_service_start(void) {
     httpd_config_t server_config = HTTPD_DEFAULT_CONFIG();
     server_config.open_fn=open_http_socket;
     server_config.server_port = 80;
-    server_config.stack_size = 12288;
+    server_config.stack_size = 20480;
     server_config.max_uri_handlers = 4;
     server_config.lru_purge_enable = true;
     httpd_handle_t server = NULL;
