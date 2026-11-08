@@ -24,6 +24,7 @@ jobs:
       - name: Prepare verified SDK and dependencies
         shell: pwsh
         run: |
+          $PSNativeCommandUseErrorActionPreference = $true
           python tools/prepare-upstream.py
           python -m pip install -r tools/requirements-build.txt
           python desktop/mklink-wireless-config/tools/stage_remote_runtime.py --source .deps/upstream --destination .deps/remote-staged

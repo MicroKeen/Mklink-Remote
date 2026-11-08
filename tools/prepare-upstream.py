@@ -2,18 +2,29 @@
 
 Never installs a skill, edits an MCP, or executes downloaded build code.
 """
-import argparse,hashlib,json,shutil,subprocess,urllib.request,zipfile
+import argparse,hashlib,json,shutil,subprocess,time,urllib.error,urllib.request,zipfile
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
 SDK_SHA='555710fff446f80776b3fab418343d1370b6a083faa38f7d568896ac63c3d300'
 SDK_URL='https://github.com/MicroKeen/Mklink-AI-Probe/releases/download/v0.4.0/Mklink-AI-Probe-v0.4.0-Skill.zip'
+def download_sdk(partial):
+    for attempt in range(4):
+        try:
+            with urllib.request.urlopen(SDK_URL,timeout=90) as response,partial.open('wb') as out:
+                shutil.copyfileobj(response,out)
+            return
+        except (urllib.error.URLError,TimeoutError) as error:
+            if isinstance(error,urllib.error.HTTPError) and error.code not in (429,500,502,503,504):raise
+            if attempt==3:raise
+            time.sleep(2**attempt)
+
 def main():
     parser=argparse.ArgumentParser();parser.add_argument('--directory',type=Path,default=ROOT/'.deps');parser.add_argument('--source',type=Path);parser.add_argument('--sdk-archive',type=Path);parser.add_argument('--sdk-only',action='store_true');args=parser.parse_args()
     dest=args.directory.resolve();dest.mkdir(parents=True,exist_ok=True)
     archive=args.sdk_archive or dest/'mklink-sdk-0.4.0.zip'
     if not archive.exists():
         partial=archive.with_suffix('.partial')
-        with urllib.request.urlopen(SDK_URL,timeout=90) as response,partial.open('wb') as out:shutil.copyfileobj(response,out)
+        download_sdk(partial)
         if hashlib.sha256(partial.read_bytes()).hexdigest()!=SDK_SHA:raise RuntimeError('SDK download digest mismatch; retained .partial for inspection')
         partial.rename(archive)
     if hashlib.sha256(archive.read_bytes()).hexdigest()!=SDK_SHA:raise RuntimeError('SDK archive digest mismatch')
