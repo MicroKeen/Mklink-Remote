@@ -5,10 +5,11 @@ export default function AdvancedCaptureResult({action,result}:{action:string;res
   const stats=(data.stats&&typeof data.stats==='object'?data.stats:{}) as Record<string,unknown>;
   const metrics=action==='rtos_trace'?[
     ['调度事件',number(data.events,0)],['接收事件率',`${number(data.events_s)} /s`],['丢失数据包',number(data.dropped_packets,0)],['解码同步',data.synced?'已同步':'未同步'],
-  ]:[['采样数量',number(data.samples,0)],['接收采样率',`${number(data.received_samples_s)} Hz`],['目标采样率',`${number(data.target_samples_s)} Hz`],['丢失采样',number(stats.parser_dropped_frames,0)]];
+  ]:[['采样数量',number(data.samples,0)],['接收采样率',`${number(data.received_samples_s)} Hz`],['目标采样率',`${number(data.target_samples_s)} Hz`],['解析丢帧',number(stats.parser_dropped_frames,0)],['CRC 错误',number(stats.parser_crc_errors,0)],['停止与收尾',typeof data.stop_and_drain_ms==='number'?`${number(data.stop_and_drain_ms,0)} ms`:'—']];
   const cases=Array.isArray(data.cases)?data.cases as Record<string,unknown>[]:[];
   return <div className="capture-result" aria-label="高级采集结果" aria-live="polite">
     {action==='benchmark'?<div className="capture-table"><table><caption>同一段目标 Flash 的传输对比</caption><thead><tr><th>读取窗口</th><th>读取中位耗时</th><th>95% 耗时</th><th>有效吞吐</th></tr></thead><tbody>{cases.map((row,i)=><tr key={i}><td>{number(row.window_bytes,0)} B</td><td>{number(row.p50_ms)} ms</td><td>{number(row.p95_ms)} ms</td><td>{typeof row.goodput_bytes_s==='number'?number(row.goodput_bytes_s/1024):'—'} KiB/s</td></tr>)}</tbody></table></div>:<div className="capture-metrics">{metrics.map(([name,value])=><div key={name}><span>{name}</span><strong>{value}</strong></div>)}</div>}
+    {action==='superwatch'&&<p className="block-hint">解析丢帧不等于丢失样本总数；未报告的统计显示为 —。接收速率包含无线传输与停止收尾时间。{data.mux_stop_verified===true?'本次已收到匹配的停止应答。':'停止应答未单独报告。'}</p>}
     {action==='rtos_trace'&&!!data.task_names&&typeof data.task_names==='object'&&<p>已识别任务：{Object.values(data.task_names).map(String).join('、')||'本次未收到任务名称，请检查目标 Trace 配置'}</p>}
     {typeof data.capture_path==='string'&&<p className="capture-path">采集记录：<span className="mono">{data.capture_path}</span></p>}
     <details><summary>查看完整统计</summary><pre className="target-terminal mono" tabIndex={0}>{JSON.stringify(result,null,2)}</pre></details>

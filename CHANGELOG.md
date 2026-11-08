@@ -1,6 +1,21 @@
 # Changelog
 
+## 0.8.1 — desktop candidate
+
+- Rebuild the private backend and target helper from the tested 0.4.3 pin, including Remote heartbeat, STOP-tail and backpressure fixes. No experimental dual-core/64 KiB changes are included.
+- Reduce the main navigation to overview, shared debugging, logs and help; retain setup and maintenance under an expandable group, with overview diagnostics collapsed.
+- Update in-app Agent guidance and machine-readable CLI capabilities with the backend binding, task completion rules and sampling limitations.
+- Keep STOP requests visibly pending until the target job ends; distinguish parser frame loss from sample loss and handle immediate cancellation without dividing by zero.
+- This is a local desktop candidate. Browser/offline checks do not constitute three-route hardware qualification or a public release.
+
+
 ## Unreleased
+
+- Target helper reuses the staged Remote adapter; migrate SuperWatch tail callbacks and shared RTT recorder stop/drain, removing the duplicate transport and startup queue patch.
+
+- Rebase the private backend onto MKLink PR #70 (`03f3dc8e`), reuse its transport policies and independently correlated HTTP PINGs, and retain Remote compression, HEX, recovery and diagnostics.
+- Preserve measurement tails for acknowledged small/narrow and bulk MUX stops; retain upstream capability, timing and reset validation. Offline verification now uses the staged private backend.
+- This source migration is not a firmware upgrade or a new hardware qualification; older probe sampling capabilities can be rejected by the new core.
 
 - The shared Remote backend and S3 gateway negotiate independent Wi-Fi sample reads and optional lossless compression. Heartbeats and STOP can use the control connection during a read.
 - SuperWatch checks already-queued samples at the read-error deadline. Dump measurements separate the startup echo from parser errors and account for in-window samples delivered at STOP.

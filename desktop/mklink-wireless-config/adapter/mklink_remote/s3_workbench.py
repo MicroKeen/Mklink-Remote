@@ -48,7 +48,8 @@ class Workbench:
                 service = rpc(self.info, 'POST', '/_runtime/remote-service',
                               dict(enabled=True, host='127.0.0.1', port=port, allow_lan=False, token=token))
                 registry.add(self.site_name, 'ws://127.0.0.1:' + str(port), token,
-                             note='S3 adapter; existing shared backend and Site Agent')
+                             note='S3 adapter; existing shared backend and Site Agent',
+                             timeout=60.0, flash_timeout=1200.0)
             else:
                 try:
                     saved = registry.get(self.site_name)

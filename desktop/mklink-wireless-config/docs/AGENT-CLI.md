@@ -8,6 +8,9 @@ Windows 下在安装目录用 `.\mklink-remote.exe` 执行以下命令，或传�
 
 ```powershell
 mklink-remote help
+mklink-remote call capabilities
+mklink-remote service_status
+mklink-remote target_job
 mklink-remote ping
 mklink-remote list_ports
 mklink-remote list_ble
@@ -17,6 +20,8 @@ mklink-remote call rpc --params-file status.json
 
 connect.json 为 `{"port":"实际串口"}`；status.json 为 `{"method":"get_status","params":{}}`。
 参数文件是 UTF-8 JSON，也可用 `--params-file -` 从 stdin 读取。命令行只放文件名，不放密码、管理密钥、租约令牌。输出 `{ok,data}` 或 `{ok:false,error}`，失败退出码非零。写入超时不能重发，先查询任务和设备状态。
+
+本地 0.8.1 候选包绑定 Remote 私有后台 0.4.3 / `3905a68`（含 PR #70 / #72）。`help` 描述当前 CLI 文件；`call capabilities` 查询运行中的服务。核对两者版本与 `backend_binding`，不能仅凭新安装包文件名判断后台已经更新。升级后若仍运行旧服务，先结束任务并退出其共享客户端，再正常重启 Remote。
 
 ## 功能对应
 
@@ -41,7 +46,7 @@ connect.json 为 `{"port":"实际串口"}`；status.json 为 `{"method":"get_sta
 
 service_status 返回当前管理连接和共享客户端状态；CLI 改变连接后，工作台会同步连接状态并读取当前节点配置。
 
-外观与导航也可通过 preferences_get / preferences_set 控制：theme=dark/light，skin=technical/aurora/sand，page=overview/shared/network/gateway/logs/update/install/help。已打开的工作台会同步这些偏好。service_stop 在本服务没有在途任务、且已退出共享客户端时正常停止服务；它不强杀共享后台。
+外观与导航也可通过 preferences_get / preferences_set 控制：theme=dark/light，skin=technical/aurora/sand，page=overview/shared/network/gateway/logs/update/install/help/target。主导航保留概览、共享调试、日志和帮助；其余入口位于“设置与维护”。已打开的工作台会同步这些偏好。service_stop 在本服务没有在途任务、且已退出共享客户端时正常停止服务；它不强杀共享后台。
 
 ## 原版技能与 MCP
 
@@ -49,11 +54,19 @@ service_status 返回当前管理连接和共享客户端状态；CLI 改变连�
 2. `shared_control` 的 attach 参数包含 node（node_id、transport、address、token）、project_root 和可选 axf。
 3. Remote 注册一个标准 Site Agent 站点。读取返回的 site 与 instance_id。
 4. 启动原版安装目录的 `python -m mklink.remote.mcp`，使用原版技能的远程流程；remote_sites → remote_connect → remote_capabilities → remote_call。
-5. 如果原版 MCP 在站点注册前已启动，或站点端口已变化，需要重新加载 MCP。原版站点列表不会动态重载；Remote 不修改它。
+5. 如果原版 MCP 在站点注册前已启动，或站点端口已变化，需要重新加载 MCP。支持站点重载的新版客户端可以重载配置，旧客户端需重启；Remote 不修改客户端代码。
 
 默认入口是带独立令牌的本机 WS。WSS 需要另行配置 TLS；S3 HTTP 地址不是技能站点地址。站点注册属于用户配置，不改变技能或 MCP 代码。原版技能运行时与 Remote 私有服务运行时分别维护。
 
 无线烧录耗时可能超过原版客户端固定超时。因此 Remote 服务端为此类操作立即返回现有后台任务的 job_id、request_id 和 state；这些字段只表示已提交，不能当作烧录成功。继续使用原版 `remote_call` 的 `jobs.status` 查询终态，或用 Remote CLI 的 job.status。断开客户端不取消在途烧录，未知结果不得重放。
+
+## 停止与采集质量
+
+`stop_target` 只停止本服务启动的独立目标任务。返回 accepted 只表示已接受停止请求；继续查询 `target_job`，直到 `running=false`。`stop_requested=true` 或 phase=stopping 时保持连接，等待尾部处理与终态，不重复提交。共享采集使用其后台对应的停止和任务接口，不能用独立任务停止替代。
+
+记录请求速率、目标时间戳速率、接收速率、解析丢帧、CRC 错误、队列趋势和停止结果。未报告的统计保持未知；parser_dropped_frames 不是丢失样本总数。背压保护导致退出仍是采集失败，不以收尾成功冒充采样率通过。Wi-Fi 800 Hz 尚未稳定达标，从低负载开始，不静默降采样或改变目标协议。
+
+STOP 后的 RAM 核验须在通道健康、无在途目标任务时进行。超时或 outcome_unknown 时先保留日志、核对后台与网关状态，不能重放旧命令、清空缓存或绕过隔离。节点 OTA 的备用槽写完也不是升级完成，仍需核验、激活、重连和确认版本。
 
 ## 会话与日志边界
 

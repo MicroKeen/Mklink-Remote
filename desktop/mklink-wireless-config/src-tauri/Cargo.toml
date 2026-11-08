@@ -1,6 +1,6 @@
 [package]
 name = "mklink-wireless-config"
-version = "0.8.0"
+version = "0.8.1"
 edition = "2021"
 default-run = "mklink-wireless-config"
 

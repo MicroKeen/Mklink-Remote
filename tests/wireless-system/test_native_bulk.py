@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock,patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[2]/'desktop/mklink-wireless-config/tools'))
 from native_bulk import read_flash_binary,finite_parser,performance_sweep
+from mklink._types import DeviceState
 
 class BinaryReadTests(unittest.TestCase):
     def test_invalid_region_never_contacts_probe(self):
@@ -23,12 +24,12 @@ class BinaryReadTests(unittest.TestCase):
         session.stats=dict(parser_crc_errors=crc_errors,parser_dropped_frames=0,parser_dropped_bytes=0,firmware_flagged_frames=0)
         link=Mock();link.usb_metrics_supported=True;link.read_max=32768
         link.call.side_effect=[dict(rx_pending=0),dict(tx_start_us=100,last_rx_us=20100,rx_bytes=4200)]
-        device=SimpleNamespace(_bridge=Mock(link=link))
+        device=SimpleNamespace(_bridge=Mock(link=link,state=DeviceState.READY,_mux=None))
         return data,session,device
 
     def test_exact_payload_and_producer_time_exclude_radio_cleanup(self):
         data,session,device=self.scenario()
-        with patch('mklink.dump_memory.DumpMemoryStreamSession',return_value=session):
+        with patch('mklink.legacy_dump.LegacyDumpSession',return_value=session):
             actual,report=read_flash_binary(device,0x08000000,len(data))
         self.assertEqual(actual,data);self.assertEqual(report['sha256'],hashlib.sha256(data).hexdigest())
         self.assertEqual(report['usb_producer_payload_bytes_s'],204800)
@@ -38,7 +39,7 @@ class BinaryReadTests(unittest.TestCase):
     def test_bad_crc_is_not_replayed_and_native_stop_still_runs(self):
         for kwargs in [dict(bad_block=True),dict(crc_errors=1)]:
             _,session,device=self.scenario(**kwargs)
-            with patch('mklink.dump_memory.DumpMemoryStreamSession',return_value=session):
+            with patch('mklink.legacy_dump.LegacyDumpSession',return_value=session):
                 with self.assertRaises((RuntimeError,ValueError)):read_flash_binary(device,0x08000000,4096)
             session.start.assert_called_once();session.stop.assert_called_once()
             self.assertEqual(device._bridge.link.call.call_count,2 if kwargs.get('crc_errors') else 1)
@@ -55,9 +56,17 @@ class BinaryReadTests(unittest.TestCase):
 
     def test_previous_tail_blocks_new_dump(self):
         _,session,device=self.scenario();device._bridge.link.call.side_effect=[dict(rx_pending=64)]
-        with patch('mklink.dump_memory.DumpMemoryStreamSession',return_value=session):
+        with patch('mklink.legacy_dump.LegacyDumpSession',return_value=session):
             with self.assertRaisesRegex(RuntimeError,'undrained'):read_flash_binary(device,0x08000000,4096)
         session.start.assert_not_called()
+
+    def test_active_capture_is_not_stopped_to_start_legacy_backup(self):
+        _,session,device=self.scenario()
+        device._bridge._mux=SimpleNamespace(sampling=True)
+        with self.assertRaisesRegex(RuntimeError,'idle'):
+            read_flash_binary(device,0x08000000,4096)
+        device._bridge._leave_multiplex.assert_not_called()
+        device._bridge.link.call.assert_not_called()
 
     def test_clock_matrix_uses_usb_producer_and_restores_default_after_corruption(self):
         device=Mock();link=SimpleNamespace(poisoned=False)

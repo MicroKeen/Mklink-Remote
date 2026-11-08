@@ -1,4 +1,4 @@
-/* USB MSC file delivery for native MKLink FLM/load.bin operations.
+/* USB MSC file delivery for native MKLink FLM/load.bin/load.hex operations.
  * No formatting, firmware updates, arbitrary paths, or target commands here.
  * Lock order: config RPC -> storage; USB callbacks never take either lock.
  */
@@ -125,7 +125,7 @@ cJSON *v4_storage_rpc(const char *method,const cJSON *p,const char *owner,int *c
         const char *sha=text(p,"sha256"),*kind=text(p,"kind");size_t total;
         if(upload.id[0])goto done;
         if(!sha||strlen(sha)!=64||strspn(sha,"0123456789abcdef")!=64||!kind||
-           (strcmp(kind,"BIN")&&strcmp(kind,"FLM"))||!integer(p,"size",FILE_LIMIT,&total)||!total){*code=400;*message="BIN/FLM kind, size and lowercase SHA256 required";goto done;}
+           (strcmp(kind,"BIN")&&strcmp(kind,"FLM")&&strcmp(kind,"HEX"))||!integer(p,"size",FILE_LIMIT,&total)||!total){*code=400;*message="BIN/HEX/FLM kind, size and lowercase SHA256 required";goto done;}
         if(mkdir("/v4/WLINK",0700)&&errno!=EEXIST){*code=500;*message="Cannot create isolated WLINK directory";goto done;}
         char final[64],actual[65];size_t actual_size;
         snprintf(final,sizeof final,"/v4/WLINK/F%.7s.%s",sha,kind);

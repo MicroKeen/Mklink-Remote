@@ -11,3 +11,6 @@
 
 .brand-app-icon{width:40px;height:40px;object-fit:contain;flex:none}
 @media(max-width:760px){.brand-app-icon{width:34px;height:34px}}
+
+/* Keep maintenance and diagnostic detail available without crowding the workspace. */
+.secondary-nav{margin-top:16px;border-top:1px solid var(--border);padding-top:12px;width:100%}.secondary-nav summary,.disclosure>summary{cursor:pointer;color:var(--muted);font-size:var(--font-small);padding:14px 12px}.secondary-nav[open]>summary,.disclosure[open]>summary{color:var(--text)}.secondary-nav button{width:100%}.disclosure{margin:16px 0;border:1px solid var(--border);border-radius:8px;background:var(--panel)}.disclosure>summary{font-weight:600}.disclosure>summary:focus-visible,.secondary-nav>summary:focus-visible{outline:2px solid var(--brand);outline-offset:-3px}.disclosure .panel{border:0;margin:0}.disclosure .chain{margin:0;border:0}.disclosure .log-section{padding:0 20px 16px}.sidebar h1{font-size:26px;line-height:1.4}.help-start details{margin-top:16px}.capture-result .block-hint{line-height:1.7}

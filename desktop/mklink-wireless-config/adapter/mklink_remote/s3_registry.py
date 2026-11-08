@@ -71,7 +71,7 @@ def public_node(key, node):
     return dict(probe_id=key, port=key, vid=None, pid=None,
                 serial_number='', description='ESP32-S3 wireless MKLink',
                 location=node['transport'], transport='s3-' + node['transport'],
-                identity_stable=True, node_id=node['node_id'], alias='')
+                identity_stable=True, local_usb=False, node_id=node['node_id'], alias='')
 
 
 def inventory():

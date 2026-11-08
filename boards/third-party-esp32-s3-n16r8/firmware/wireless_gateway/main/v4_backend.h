@@ -14,3 +14,5 @@ void v4_backend_attach(unsigned address, usb_device_handle_t device);
 void v4_backend_detach(unsigned address);
 void v4_backend_snapshot(v4_backend_status_t *out);
 void v4_backend_metrics_reset(void);
+bool v4_backend_mux_recoverable(void);
+probe_result_t v4_backend_recover(void);

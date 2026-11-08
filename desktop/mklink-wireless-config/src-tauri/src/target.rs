@@ -12,6 +12,7 @@ pub struct TargetJob {
     pub id: String,
     pub node_id: String,
     pub running: bool,
+    pub stop_requested: bool,
     pub action: String,
     pub phase: String,
     pub done: u64,
@@ -110,10 +111,11 @@ pub fn run_worker(service: &Arc<Service>, tool: &Path, request: Value) -> Result
 }
 
 pub fn request_stop(service: &Service) -> Result<(), String> {
-    let job=service.target.lock().unwrap();
+    let mut job=service.target.lock().unwrap();
     if !job.running || !["prepare_flash","rtt","superwatch","rtos_trace"].contains(&job.action.as_str()) {
         return Err("当前阶段不可停止；烧录开始后需等待校验完成".into());
     }
+    job.stop_requested=true;
     service.target_stop.store(true,Ordering::SeqCst);Ok(())
 }
 
@@ -141,4 +143,18 @@ pub fn start(service: Arc<Service>, tool: std::path::PathBuf, request: Value) ->
         }
     });
     Ok(())
+}
+
+#[cfg(test)]
+mod stop_tests {
+    #[test]
+    fn stop_request_keeps_job_running_and_preserves_write_guard() {
+        let service=crate::Service::default();
+        { let mut job=service.target.lock().unwrap();job.running=true;job.action="superwatch".into(); }
+        super::request_stop(&service).unwrap();
+        { let job=service.target.lock().unwrap();assert!(job.running && job.stop_requested); }
+        { let mut job=service.target.lock().unwrap();job.action="flash".into();job.stop_requested=false; }
+        assert!(super::request_stop(&service).is_err());
+        assert!(!service.target.lock().unwrap().stop_requested);
+    }
 }

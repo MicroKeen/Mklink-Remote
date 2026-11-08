@@ -7,7 +7,7 @@ export function probeView(status:DeviceStatus|null,fresh:boolean):ProbeView{
   if(status.usb.invalid_bulk)return {label:'兼容问题待解决',tone:'warn',ready:false,detail:`${status.usb.invalid_bulk} 个 Bulk 端点与当前速度不兼容；请核对 V4 修复固件。`};
   const probe=status.probe;
   if(!probe)return {label:'已枚举 · 需升级 S3',tone:'warn',ready:false,detail:'此 S3 固件只有 USB 枚举能力，更新配套固件后才能验证命令通信。'};
-  if(probe.state==='outcome_unknown'||probe.state==='quarantined')return {label:'通信结果待核对',tone:'warn',ready:false,detail:probe.error||'连接已隔离，不会重放请求。核对结果后重新连接 USB2。'};
+  if(probe.state==='outcome_unknown'||probe.state==='quarantined')return {label:'通信结果待核对',tone:'warn',ready:false,detail:probe.error||'连接已隔离，旧操作不会重放。保存日志后重新建立调试会话；软件恢复失败时再检查 USB 连接。'};
   if(probe.ready&&probe.state==='ready'&&status.usb.speed==='FULL_12Mbps'&&[8,16,32,64].includes(probe.in_mps)&&[8,16,32,64].includes(probe.out_mps)&&probe.version.trim())return {label:'探针握手通过',tone:'good',ready:true,detail:'已通过命令口身份与版本检查。可执行通信回显；目标芯片与中心业务另行验证。'};
   if(['opening','handshake'].includes(probe.state))return {label:'正在检查探针',tone:'info',ready:false,detail:'正在打开命令接口并核对身份和版本。'};
   return {label:'通信尚未就绪',tone:'warn',ready:false,detail:probe.error||'已完成 USB 枚举，命令口尚未通过检查。'};

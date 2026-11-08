@@ -94,7 +94,7 @@ export const api={
   },
   chooseTargetPath:async(kind:'project'|'firmware'|'symbols'):Promise<string|null>=>demo?(kind==='project'?'D:\\Demo\\STM32F411':kind==='symbols'?'D:\\Demo\\STM32F411\\APP.axf':'D:\\Demo\\STM32F411\\APP.axf'):call('choose_target_path',{kind}),
   targetJob:async():Promise<TargetJob>=>demo?structuredClone(targetJob):TargetJobSchema.parse(await call('target_job')),
-  stopTarget:async()=>{if(demo){targetJob={...targetJob,running:false,phase:'failed',error:'演示任务已停止，未操作硬件'};owner='';return;}await call('stop_target');},
+  stopTarget:async()=>{if(demo){const id=targetJob.id;targetJob={...targetJob,stop_requested:true,phase:'stopping'};setTimeout(()=>{if(targetJob.id!==id)return;targetJob={...targetJob,running:false,phase:'complete'};owner='';},1000);return;}await call('stop_target');},
   startTarget:async(request:TargetRequest)=>{
     if(!demo){await call('start_target',{request});return;}
     if(targetJob.running)throw Error('目标任务正在运行');
@@ -114,7 +114,7 @@ export const api={
       if(request.action==='verify_flash')return {programmed:false,readback_only:true,verified:true,reset_once:true,bytes:475136,bootloader_preserved:true,options_preserved:true,external_flash_programmed:false};
       const channel=String((p.channels as number[])[0]);const text=`演示 RTT CH${channel} · 未操作硬件\nMW-HIL:20:a56c3917\n${p.input_text?'MW-ECHO:'+p.input_text+'\n':''}`;const hex=Array.from(new TextEncoder().encode(text),n=>n.toString(16).padStart(2,'0')).join('');return {seconds:p.duration,channels:{[channel]:hex},stats:{event_gaps:0}};
     };
-    setTimeout(()=>{if(targetJob.id!==id||!targetJob.running)return;targetJob={...targetJob,running:false,phase:'complete',result:result()};},500);
+    setTimeout(()=>{if(targetJob.id!==id||!targetJob.running||targetJob.stop_requested)return;targetJob={...targetJob,running:false,phase:'complete',result:result()};},['rtt','superwatch','rtos_trace'].includes(request.action)?3000:500);
   },
 
 };

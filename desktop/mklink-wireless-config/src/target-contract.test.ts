@@ -1,5 +1,5 @@
 import {describe,it,expect} from 'vitest';
-import {integer,memoryRead,ramWrite,rttInput,PreparedPlan} from './target-contract';
+import {integer,memoryRead,ramWrite,rttInput,PreparedPlan,TargetJobSchema,emptyTargetJob,targetStopping} from './target-contract';
 
 describe('target operation boundaries',()=>{
   it('rejects ambiguous addresses and overflowing ranges',()=>{
@@ -26,4 +26,12 @@ describe('target operation boundaries',()=>{
   it('rejects a plan without independently verified backup',()=>{
     expect(PreparedPlan.safeParse({state:'PREPARED',backup_verified:false}).success).toBe(false);
   });
+});
+
+it('retains pending STOP until terminal state and accepts older job payloads',()=>{
+ const {stop_requested,...old}=emptyTargetJob;
+ expect(TargetJobSchema.parse(old).stop_requested).toBe(false);
+ expect(targetStopping({...emptyTargetJob,running:true,stop_requested:true})).toBe(true);
+ expect(targetStopping({...emptyTargetJob,running:true,phase:'stopping'})).toBe(true);
+ expect(targetStopping({...emptyTargetJob,running:false,stop_requested:true})).toBe(false);
 });

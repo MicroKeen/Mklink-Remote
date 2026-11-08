@@ -6,6 +6,8 @@
 #include "esp_app_desc.h"
 #include "esp_check.h"
 #include "esp_http_server.h"
+#include "http_diagnostics.h"
+#include "http_reply.h"
 #include "esp_log.h"
 #include "esp_mac.h"
 #include "esp_random.h"
@@ -19,6 +21,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
+#include "freertos/idf_additions.h"
 #include "mbedtls/base64.h"
 #include "network_manager.h"
 #include "node_policy.h"
@@ -39,7 +42,7 @@ static control_lease_t lease;
 static probe_transport_t probe;
 /* Protected by rpc_lock; these are CPU workspaces, never USB DMA buffers. */
 static struct {uint8_t input[PROBE_PAYLOAD_MAX],output[PROBE_READ_MAX];unsigned char encoded[((PROBE_READ_MAX+2)/3)*4+1];} *stream_workspace;
-static struct {tdefl_compressor codec; uint8_t out[8192];} *pull_zip;
+static struct {tdefl_compressor codec; uint8_t out[PROBE_READ_MAX];} *pull_zip;
 
 /* Independent DEFLATE streams keep a lost RPC from changing the next block's dictionary. */
 static size_t compress_pull(const uint8_t *data,size_t bytes){
@@ -50,12 +53,39 @@ static size_t compress_pull(const uint8_t *data,size_t bytes){
     tdefl_status rc=tdefl_compress(&pull_zip->codec,data,&consumed,pull_zip->out,&produced,TDEFL_FINISH);
     return rc==TDEFL_STATUS_DONE&&consumed==bytes?produced:0;
 }
+/* BLE keeps its flash-capable internal stack; only compression runs in PSRAM. */
+static SemaphoreHandle_t zip_start, zip_done;
+static struct {const uint8_t *data;size_t bytes,result;unsigned stack_min;} zip_job;
+static void zip_worker(void *unused){
+    (void)unused;
+    for(;;){
+        xSemaphoreTake(zip_start,portMAX_DELAY);
+        zip_job.result=compress_pull(zip_job.data,zip_job.bytes);
+        zip_job.stack_min=uxTaskGetStackHighWaterMark(NULL);
+        xSemaphoreGive(zip_done);
+    }
+}
+static size_t compress_ble_read(const uint8_t *data,size_t bytes){
+    /* rpc_lock holds the input and shared codec until this job completes. */
+    zip_job.data=data;zip_job.bytes=bytes;
+    xSemaphoreGive(zip_start);
+    xSemaphoreTake(zip_done,portMAX_DELAY);
+    return zip_job.result;
+}
 static SemaphoreHandle_t config_lock, rpc_lock;
 static nvs_handle_t storage;
 static char device_id[13];
 static char events[24][128];
 static unsigned event_count;
 static uint64_t now_ms(void) { return esp_timer_get_time() / 1000; }
+static http_diagnostics_t http_diag;
+static portMUX_TYPE http_diag_lock = portMUX_INITIALIZER_UNLOCKED;
+static void http_step(unsigned stage, int error, uint32_t started) {
+    uint32_t now = (uint32_t)now_ms();
+    portENTER_CRITICAL(&http_diag_lock);
+    http_diagnostics_record_request(&http_diag, stage, now, started, error);
+    portEXIT_CRITICAL(&http_diag_lock);
+}
 static void record(const char *text) {
     snprintf(events[event_count++ % 24], 128, "%llu %s", (unsigned long long)now_ms(), text);
     ESP_LOGI("config", "%s", text);
@@ -168,6 +198,41 @@ static cJSON *status_json(void) {
     cJSON_AddNumberToObject(d,"free_psram",heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
     cJSON_AddNumberToObject(d,"free_internal",heap_caps_get_free_size(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT));
     cJSON_AddNumberToObject(d,"largest_internal",heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT));
+    http_diagnostics_t diag;
+    portENTER_CRITICAL(&http_diag_lock);
+    diag = http_diag;
+    portEXIT_CRITICAL(&http_diag_lock);
+    cJSON *http = cJSON_AddObjectToObject(j, "http");
+    const char *names[] = {"requests", "bodies", "processed", "sent", "recv_errors", "send_errors", "alloc_errors"};
+    for (unsigned i = 0; i < HTTP_DIAG_COUNT; i++) cJSON_AddNumberToObject(http, names[i], diag.counts[i]);
+    cJSON_AddNumberToObject(http, "stage", diag.stage);
+    cJSON_AddNumberToObject(http, "started_ms", diag.started_ms);
+    cJSON_AddNumberToObject(http, "elapsed_ms", diag.elapsed_ms);
+    cJSON_AddNumberToObject(http, "error", diag.error);
+    http_reply_status_t sends;
+    http_reply_snapshot(&sends);
+    cJSON *tx = cJSON_AddObjectToObject(j, "http_send");
+    cJSON_AddNumberToObject(tx,"accepted",sends.accepted);
+    cJSON_AddNumberToObject(tx,"rejected",sends.rejected);
+    cJSON_AddNumberToObject(tx,"completed",sends.completed);
+    cJSON_AddNumberToObject(tx,"send_errors",sends.send_errors);
+    cJSON_AddNumberToObject(tx,"completion_errors",sends.completion_errors);
+    cJSON_AddNumberToObject(tx,"active",sends.active);
+    cJSON_AddNumberToObject(tx,"peak",sends.peak);
+    cJSON_AddNumberToObject(tx,"stack_min_bytes",sends.stack_min_bytes);
+    cJSON *slots = cJSON_AddArrayToObject(tx,"slots");
+    for(unsigned i=0;i<HTTP_REPLY_SLOTS;i++){
+        const http_reply_slot_status_t *s=&sends.slots[i];
+        cJSON *slot=cJSON_CreateObject();
+        cJSON_AddBoolToObject(slot,"active",s->active);
+        cJSON_AddNumberToObject(slot,"socket",s->socket_fd);
+        cJSON_AddNumberToObject(slot,"stage",s->stage);
+        cJSON_AddNumberToObject(slot,"started_ms",s->started_ms);
+        cJSON_AddNumberToObject(slot,"elapsed_ms",s->elapsed_ms);
+        cJSON_AddNumberToObject(slot,"bytes",s->bytes);
+        cJSON_AddNumberToObject(slot,"error",s->error);
+        cJSON_AddItemToArray(slots,slot);
+    }
     cJSON_AddItemToObject(j,"firmware_update",firmware_update_status());
     cJSON_AddStringToObject(j, "network_mode", n.actual);
     cJSON_AddStringToObject(j, "preferred_mode", c.network_mode);
@@ -274,19 +339,40 @@ static cJSON *dispatch(const cJSON *request, rpc_transport_t transport) {
         cJSON_AddStringToObject(result,"framing","pika_prompt_v1");
         cJSON_AddBoolToObject(result,"binary_streaming",probe.backend.stream!=NULL);
         cJSON_AddBoolToObject(result,"stream_active",probe.stream_active);
+        cJSON_AddBoolToObject(result,"mux_recovery_supported",true);
+        cJSON_AddBoolToObject(result,"mux_recoverable",v4_backend_mux_recoverable());
         cJSON_AddStringToObject(result,"stream_framing","mklink_native_bytes_v1");
         cJSON_AddBoolToObject(result,"storage_ready",v4_storage_ready());
         cJSON_AddBoolToObject(result,"read_limit_supported",true);
         cJSON_AddBoolToObject(result,"stream_renews_lease",true);
         cJSON_AddBoolToObject(result,"independent_read_sequence",true);
         cJSON_AddBoolToObject(result,"zlib_pull_supported",transport==RPC_HTTP);
+        cJSON_AddBoolToObject(result,"zlib_read_supported",transport==RPC_BLE);
         cJSON_AddNumberToObject(result,"max_read_payload",4096); /* Legacy clients retain their4KiB guard. */
         cJSON_AddNumberToObject(result,"bulk_read_max",PROBE_READ_MAX);
         cJSON_AddBoolToObject(result,"usb_metrics_supported",true);
         cJSON_AddNumberToObject(result,"file_chunk_max",2048);
+        cJSON_AddBoolToObject(result,"hex_files_supported",true);
         cJSON_AddNumberToObject(result,"next_sequence",!strcmp(probe.controller,lease.token)?(double)probe.last_sequence+1:1);
         cJSON_AddStringToObject(result, "encoding", "base64_opaque_bytes_v1");
         cJSON_AddBoolToObject(result, "automatic_replay", false);
+    } else if (!strcmp(m,"probe.recover")) {
+        cJSON *generation=cJSON_GetObjectItemCaseSensitive(p,"generation");
+        if(!authorized(p)||lease.busy||v4_storage_upload_active()||!probe.dirty||
+           !strcmp(probe.controller,lease.token))
+            return failure(id,423,"Acquire a new lease after the previous owner expires before recovery");
+        if(!cJSON_IsNumber(generation)||generation->valuedouble!=probe.generation)
+            return failure(id,409,"Recovery generation changed; inspect status");
+        if(!v4_backend_mux_recoverable())return failure(id,409,"No known MUX session; recovery refused");
+        record("MUX recovery begun; old operation remains unknown");
+        if(v4_backend_recover()!=PROBE_OK)
+            return failure(id,504,"Fresh MUX HELLO/EXIT and identity not proven; quarantine retained");
+        probe_transport_bind(&probe,&probe.descriptor,&probe.backend);
+        lease.expires_ms=now_ms()+15000;
+        record("MUX recovery verified; new generation; no target command replayed");
+        result=cJSON_CreateObject();
+        cJSON_AddNumberToObject(result,"generation",probe.generation);
+        cJSON_AddBoolToObject(result,"old_outcome_resolved",false);
     } else if (!strcmp(m, "get_status"))
         result = status_json();
     else if (!strcmp(m, "get_config"))
@@ -492,11 +578,20 @@ static cJSON *dispatch(const cJSON *request, rpc_transport_t transport) {
         unsigned char *encoded_reply=stream_workspace->encoded;size_t length=0;
         /* mbedTLS requires capacity for its terminating NUL as well as the
          * encoded bytes. The PSRAM workspace already includes that byte. */
-        size_t zipped=pull&&transport==RPC_HTTP&&cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(p,"accept_zlib"))?compress_pull(output,count):0;
+        int64_t zip_start_us=esp_timer_get_time();
+        bool zip_requested=cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(p,"accept_zlib"));
+        size_t zipped=zip_requested&&pull&&transport==RPC_HTTP?compress_pull(output,count):
+            zip_requested&&op==PROBE_STREAM_READ&&transport==RPC_BLE?compress_ble_read(output,count):0;
+        int64_t zip_us=esp_timer_get_time()-zip_start_us;
         if(mbedtls_base64_encode(encoded_reply,sizeof stream_workspace->encoded,&length,zipped?pull_zip->out:output,zipped?zipped:count))return failure(id,500,"Native response encoding failed; outcome unknown");
         encoded_reply[length]=0;
         result=cJSON_CreateObject();cJSON_AddStringToObject(result,zipped?"reply_zlib_base64":"reply_base64",(char*)encoded_reply);
         if(zipped)cJSON_AddNumberToObject(result,"uncompressed_bytes",count);
+        if(op==PROBE_STREAM_READ){
+            cJSON_AddNumberToObject(result,"read_us",(double)(stream_end_us-stream_start_us));
+            cJSON_AddNumberToObject(result,"compress_us",(double)zip_us);
+            cJSON_AddNumberToObject(result,"zip_stack_min",zip_job.stack_min);
+        }
         cJSON_AddNumberToObject(result,"generation",probe.generation);cJSON_AddNumberToObject(result,"accepted_bytes",bytes);
         cJSON_AddBoolToObject(result,"stream_active",probe.stream_active);
         if(op==PROBE_STREAM_WRITE){
@@ -648,6 +743,79 @@ static void serial_task(void *arg) {
             overflow = true;
     }
 }
+static void http_rpc_sent(uint32_t started, esp_err_t error) {
+    http_step(error == ESP_OK ? HTTP_DIAG_SENT : HTTP_DIAG_SEND_ERROR, error, started);
+}
+static esp_err_t http_request_timeout(httpd_req_t *req, httpd_err_code_t error) {
+    (void)error;
+    /* Parser timeout precedes dispatch; this is proof that no RPC executed. */
+    httpd_resp_set_status(req,"408 Request Timeout");
+    httpd_resp_set_hdr(req,"X-Mklink-RPC-Executed","no");
+    httpd_resp_set_hdr(req,"Connection","close");
+    httpd_resp_sendstr(req,"Request not executed");
+    return ESP_FAIL;
+}
+typedef struct { http_reply_t *pending; char body[]; } http_rpc_job_t;
+static void http_rpc_execute(void *arg) {
+    http_rpc_job_t *job = arg;
+    http_reply_t *pending = job->pending;
+    httpd_req_t *req = http_reply_request(pending);
+    uint32_t started = http_reply_started(pending);
+    /* HTTPD work runs on its internal stack: process may write NVS/flash. */
+    char *reply = process(job->body, RPC_HTTP);
+    free(job);
+    if (!reply) {
+        http_step(HTTP_DIAG_ALLOC_ERROR, ESP_ERR_NO_MEM, started);
+        http_reply_abort(pending);
+        return;
+    }
+    http_step(HTTP_DIAG_PROCESSED, 0, started);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    http_reply_send(pending, reply, strlen(reply), true, http_rpc_sent);
+}
+static void http_rpc_receive(http_reply_t *pending) {
+    httpd_req_t *req=http_reply_request(pending);
+    uint32_t started=http_reply_started(pending);
+    http_step(HTTP_DIAG_BEGIN, 0, started);
+    http_rpc_job_t *job = malloc(sizeof *job + req->content_len + 1);
+    char *body = job ? job->body : NULL;
+    if (job) job->pending = pending;
+    if (!body) {
+        http_step(HTTP_DIAG_ALLOC_ERROR, ESP_ERR_NO_MEM, started);
+        http_reply_abort(pending);
+        return;
+    }
+    size_t used = 0;
+    while (used < (size_t)req->content_len) {
+        if ((uint32_t)now_ms() - started >= 2000) {
+            http_step(HTTP_DIAG_RECV_ERROR, HTTPD_SOCK_ERR_TIMEOUT, started);
+            free(job);
+            http_reply_abort(pending);
+            return;
+        }
+        int count = httpd_req_recv(req, body + used, req->content_len - used);
+        if (count <= 0) {
+            http_step(HTTP_DIAG_RECV_ERROR, count, started);
+            free(job);
+            http_reply_abort(pending);
+            return;
+        }
+        used += count;
+    }
+    body[used] = 0;
+    http_step(HTTP_DIAG_BODY, 0, started);
+    if (memchr(body, 0, used)) {
+        free(job);
+        httpd_resp_set_status(req, "400 Bad Request");
+        http_reply_send(pending,"Invalid JSON",12,false,NULL);
+        return;
+    }
+    if (httpd_queue_work(req->handle, http_rpc_execute, job) != ESP_OK) {
+        free(job);
+        http_reply_abort(pending);
+    }
+}
 static esp_err_t http_rpc(httpd_req_t *req) {
     char auth[64];
     node_settings_t c;
@@ -668,50 +836,37 @@ static esp_err_t http_rpc(httpd_req_t *req) {
         httpd_resp_set_status(req, "413 Payload Too Large");
         return httpd_resp_sendstr(req, "Request too large");
     }
-    char *body = malloc(req->content_len + 1);
-    if (!body)
-        return ESP_ERR_NO_MEM;
-    size_t used = 0;
-    while (used < (size_t)req->content_len) {
-        int count = httpd_req_recv(req, body + used, req->content_len - used);
-        if (count <= 0) {
-            free(body);
-            return ESP_FAIL;
-        }
-        used += count;
-    }
-    body[used] = 0;
-    if (memchr(body, 0, used)) {
-        free(body);
-        httpd_resp_set_status(req, "400 Bad Request");
-        return httpd_resp_sendstr(req, "Invalid JSON");
-    }
-    char *reply = process(body, RPC_HTTP);
-    free(body);
-    if (!reply)
-        return ESP_ERR_NO_MEM;
-    httpd_resp_set_type(req, "application/json");
-    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
-    esp_err_t err = httpd_resp_sendstr(req, reply);
-    free(reply);
-    return err;
+    http_reply_t *pending=http_reply_begin(req);
+    if(!pending)return ESP_FAIL; /* No capacity: reject before executing any RPC. */
+    http_reply_receive(pending, http_rpc_receive);
+    return ESP_OK;
 }
 extern const unsigned char web_start[] asm("_binary_device_html_start");
 extern const unsigned char web_end[] asm("_binary_device_html_end");
 static esp_err_t web_page(httpd_req_t *req) {
+    http_reply_t *pending=http_reply_begin(req);
+    if(!pending)return ESP_FAIL;
+    req=http_reply_request(pending);
     httpd_resp_set_type(req, "text/html; charset=utf-8");
     httpd_resp_set_hdr(req, "Cache-Control", "no-store");
     httpd_resp_set_hdr(req, "X-Content-Type-Options", "nosniff");
     httpd_resp_set_hdr(req, "Content-Security-Policy",
                        "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; "
                        "connect-src 'self'; img-src data:; base-uri 'none'; frame-ancestors 'none'");
-    return httpd_resp_send(req, (char *)web_start, web_end - web_start - 1);
+    http_reply_send(pending,(char *)web_start,web_end-web_start-1,false,NULL);
+    return ESP_OK;
 }
 static esp_err_t health(httpd_req_t *req) {
+    http_reply_t *pending=http_reply_begin(req);
+    if(!pending)return ESP_FAIL;
+    req=http_reply_request(pending);
     char text[96];
     snprintf(text, sizeof(text), "{\"device_id\":\"%s\",\"firmware\":\"%s\",\"protocol\":1}", device_id,esp_app_get_description()->version);
     httpd_resp_set_type(req, "application/json");
-    return httpd_resp_sendstr(req, text);
+    char *body=strdup(text);
+    if(!body){http_reply_abort(pending);return ESP_OK;}
+    http_reply_send(pending,body,strlen(body),true,NULL);
+    return ESP_OK;
 }
 static esp_err_t open_http_socket(httpd_handle_t server,int socket_fd){
     (void)server;
@@ -736,6 +891,10 @@ esp_err_t config_service_start(void) {
     rpc_lock = xSemaphoreCreateMutex();
     if (!config_lock || !rpc_lock)
         return ESP_ERR_NO_MEM;
+    zip_start=xSemaphoreCreateBinary();zip_done=xSemaphoreCreateBinary();
+    TaskHandle_t zip_task=NULL;
+    if(!zip_start||!zip_done||xTaskCreateWithCaps(zip_worker,"stream_zip",32768,NULL,3,&zip_task,
+                                              MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT)!=pdPASS)return ESP_ERR_NO_MEM;
     ESP_RETURN_ON_ERROR(nvs_flash_init(), "config", "NVS initialization failed; no automatic erase");
     ESP_RETURN_ON_ERROR(firmware_update_init(),"config","OTA initialization failed");
     ESP_RETURN_ON_ERROR(nvs_open("mkconfig", NVS_READWRITE, &storage), "config", "NVS open failed");
@@ -785,14 +944,18 @@ esp_err_t config_service_start(void) {
     ESP_RETURN_ON_ERROR(network_start(&settings), "config", "Network start failed");
     ESP_RETURN_ON_ERROR(center_start(), "config", "Center task failed");
     center_configure(&settings);
+    ESP_RETURN_ON_ERROR(http_reply_init(),"config","HTTP send workers failed");
     httpd_config_t server_config = HTTPD_DEFAULT_CONFIG();
     server_config.open_fn=open_http_socket;
     server_config.server_port = 80;
+    server_config.recv_wait_timeout = 1;
     server_config.stack_size = 20480;
     server_config.max_uri_handlers = 4;
     server_config.lru_purge_enable = true;
     httpd_handle_t server = NULL;
     ESP_RETURN_ON_ERROR(httpd_start(&server, &server_config), "config", "HTTP start failed");
+    ESP_RETURN_ON_ERROR(httpd_register_err_handler(server,HTTPD_408_REQ_TIMEOUT,http_request_timeout),
+                        "config","HTTP timeout route failed");
     httpd_uri_t rpc = {.uri = "/api/v1/rpc", .method = HTTP_POST, .handler = http_rpc},
                 web = {.uri = "/", .method = HTTP_GET, .handler = web_page},
                 health_uri = {.uri = "/health", .method = HTTP_GET, .handler = health};

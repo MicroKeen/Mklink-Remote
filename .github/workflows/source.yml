@@ -24,9 +24,10 @@ jobs:
       - name: Prepare verified SDK and dependencies
         shell: pwsh
         run: |
-          python tools/prepare-upstream.py --sdk-only
+          python tools/prepare-upstream.py
           python -m pip install -r tools/requirements-build.txt
-          python -m pip install '.deps/sdk-0.4.0[remote]'
+          python desktop/mklink-wireless-config/tools/stage_remote_runtime.py --source .deps/upstream --destination .deps/remote-staged
+          python -m pip install '.deps/remote-staged[remote]'
           npm --prefix desktop/mklink-wireless-config ci --legacy-peer-deps
       - name: Offline source checks
         run: python tools/verify-source.py --sdk .deps/sdk-0.4.0

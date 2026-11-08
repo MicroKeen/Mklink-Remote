@@ -28,10 +28,37 @@ async function freePort(){return new Promise((resolve,reject)=>{const s=net.crea
       await page.screenshot({path:`${out}/diagnostics-${skin}-${theme}.png`,fullPage:true});
       await page.setViewportSize({width:980,height:900});if(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth))throw Error('Narrow layout overflow');
     }
+    const nav=page.getByRole('navigation',{name:'主导航'});
+    await nav.getByRole('button',{name:'设备概览',exact:true}).click();
+    if(await nav.locator('button:visible').count()!==4)throw Error('Primary navigation should expose four entries');
+    if(await page.locator('.mode-overview').count())throw Error('Duplicate mode tiles remain');
+    for(const name of ['链路状态明细','内存与传输缓冲','近期设备日志']){
+      const summary=page.locator('summary').filter({hasText:name});await summary.focus();await page.keyboard.press('Enter');
+      if(!await summary.evaluate(e=>e.parentElement.open))throw Error('Disclosure keyboard failed');await summary.click();
+    }
+    await page.setViewportSize({width:1360,height:1000});await page.screenshot({path:`${out}/overview-simplified.png`,fullPage:true});
+    await nav.locator('summary').click();await nav.getByRole('button',{name:'网络与热点',exact:true}).click();
+    await page.getByRole('heading',{name:'STA · 路由器网络'}).waitFor();
+    if(await page.getByText('扫描完成；测试时请选择 C6 独立网络').count())throw Error('Fixture instructions leaked into user flow');
+    await page.getByRole('button',{name:'连接设备',exact:true}).click();
+    await nav.getByRole('button',{name:'独立验证工具',exact:true}).click();
+    await page.getByRole('button',{name:'识别目标',exact:true}).click();
+    await page.getByText('STM32F411CEUx',{exact:true}).waitFor();
+    await page.getByRole('button',{name:'选择符号',exact:true}).click();
+    await page.getByRole('button',{name:'开始 SuperWatch',exact:true}).click();
+    await page.getByRole('button',{name:'停止采集或准备',exact:true}).click();
+    await page.getByText('演示 · 正在停止并接收尾部',{exact:true}).waitFor();
+    if(!await page.getByRole('button',{name:'正在停止…',exact:true}).isDisabled())throw Error('Pending STOP must not be resubmitted');
+    if(!await page.getByRole('button',{name:'断开连接',exact:true}).isDisabled())throw Error('Connection must stay locked while stopping');
+    await page.locator('.target-job').screenshot({path:`${out}/stop-pending.png`});
+    await page.getByText('演示 · 操作完成',{exact:true}).waitFor();
     await page.getByRole('navigation',{name:'主导航'}).getByRole('button',{name:'帮助与说明',exact:true}).click();
     await page.getByRole('tab',{name:/Agent/}).click();await page.getByText('让 Agent 操作 Mklink Remote',{exact:true}).waitFor();
+    await page.locator('summary').filter({hasText:'采集质量与性能边界'}).click();
+    await page.getByText(/Wi-Fi 800 Hz 尚未稳定通过/).waitFor();
+    await page.screenshot({path:`${out}/agent-updated.png`,fullPage:true});
     if(errors.length)throw Error(JSON.stringify(errors));
-    writeFileSync(out+'/summary.json',JSON.stringify({ok:true,scope:'browser demo; no hardware',variants:6,empty_actions:true,pause_resume:true,agent_help:true,no_overflow_980:true,errors},null,2));
+    writeFileSync(out+'/summary.json',JSON.stringify({ok:true,scope:'browser demo; no hardware',variants:6,empty_actions:true,pause_resume:true,agent_help:true,compact_navigation:true,disclosure_keyboard:true,stop_pending:true,no_overflow_980:true,errors},null,2));
     console.log('Browser source smoke PASS');
   }finally{if(browser)await browser.close();server.kill();}
 })().catch(e=>{console.error(e);process.exitCode=1;});

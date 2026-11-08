@@ -30,11 +30,15 @@ const METHODS:&[(&str,&str)]=&[
 ];
 
 pub fn capabilities()->Value {
+    let pin:Value=serde_json::from_str(include_str!("../../adapter/upstream.json")).expect("Embedded backend pin");
     json!({"protocol":1,"product":"Mklink Remote","version":env!("CARGO_PKG_VERSION"),
+      "backend_binding":{"upstream_commit":pin["upstream_commit"],"runtime_version":"0.4.3","scope":"Remote private backend; original MKLink installation unchanged"},
+      "stop_semantics":"stop_target accepted means requested, not stopped; poll target_job until running=false; shared captures use their own shared backend stop/job API",
+      "capture_rules":["missing integrity statistics are unknown, not zero","parser_dropped_frames is not lost sample count","keep connection while STOP drains the tail","sustained backpressure is failure, not automatic downsampling","800 Hz Wi-Fi is not qualified as stable"],
       "commands":METHODS.iter().map(|(name,args)|json!({"name":name,"arguments":args})).collect::<Vec<_>>(),
       "node_rpc_methods":NODE_RPC_METHODS,
       "target_actions":["inspect","identify","read","write","prepare_flash","flash","verify_flash","benchmark","rtt","superwatch","rtos_trace","binary_read","performance"],
-      "workflow":["discover ports/radios","connect","rpc pair/get_status/get_config","acquire control for configuration","shared_control attach","original MKLink MCP joins registered site","poll jobs; do not replay unknown writes"],
+      "workflow":["inspect capabilities/service_status/target_job before connecting","connect using saved node identity","rpc get_status/get_config; pair only through USB","acquire control for configuration","shared_control attach","original MKLink MCP joins registered site","poll jobs; do not replay unknown writes"],
       "notes":["stdin/params file for secrets; never command-line tokens","GUI and CLI control the same local service","shared_browser returns a private local URL","file dialogs use explicit paths from CLI","original MKLink skill and MCP are unchanged"]})
 }
 
@@ -256,4 +260,16 @@ pub fn cli(){
         request(method,params)
     })();
     match result{Ok(data)=>println!("{}",json!({"ok":true,"data":data})),Err(error)=>{println!("{}",json!({"ok":false,"error":error}));std::process::exit(1);}}
+}
+
+#[cfg(test)]
+mod capability_tests {
+    #[test]
+    fn agent_reports_build_binding_and_stop_completion_contract() {
+        let c=super::capabilities();
+        let pin:serde_json::Value=serde_json::from_str(include_str!("../../adapter/upstream.json")).unwrap();
+        assert_eq!(c["backend_binding"]["upstream_commit"],pin["upstream_commit"]);
+        assert!(c["stop_semantics"].as_str().unwrap().contains("running=false"));
+        assert!(c["capture_rules"].as_array().unwrap().iter().any(|v|v.as_str().unwrap().contains("unknown, not zero")));
+    }
 }

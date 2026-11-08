@@ -6,6 +6,8 @@
 #include "v4_backend.h"
 #include "config_service.h"
 #include "probe_protocol.h"
+#include "mux_recovery.h"
+#include "esp_random.h"
 #include "esp_log.h"
 #include "esp_heap_caps.h"
 #include "esp_timer.h"
@@ -29,6 +31,7 @@ static StaticStreamBuffer_t rx_control;
 static uint8_t *rx_storage;
 static mklink_reply_t *response;
 static cdc_acm_dev_hdl_t cdc;
+static bool mux_mode;
 static portMUX_TYPE status_mux=portMUX_INITIALIZER_UNLOCKED;
 static v4_backend_status_t status={.state="not_connected"};
 void v4_backend_metrics_reset(void){
@@ -130,7 +133,9 @@ static probe_result_t stream(void *context,probe_stream_op_t op,const uint8_t *i
     v4_backend_status_t current;v4_backend_snapshot(&current);
     if(!strcmp(current.state,"quarantined")||failed())rc=PROBE_OUTCOME_UNKNOWN;
     else if(!cdc||strcmp(current.state,"ready"))rc=PROBE_NOT_READY;
+    else if(op==PROBE_STREAM_OPEN||op==PROBE_STREAM_CLOSE)mux_mode=false;
     else if(op==PROBE_STREAM_WRITE){
+        if(n==13 && !memcmp(in,"~MKLINK-MUX1\n",13))mux_mode=true;
         portENTER_CRITICAL(&status_mux);
         if(status.measure_start_us){
             if(!status.measure_tx_start_us)status.measure_tx_start_us=esp_timer_get_time();
@@ -168,6 +173,35 @@ static bool handshake(void){
     portENTER_CRITICAL(&status_mux);snprintf(status.version,sizeof status.version,"%s",version);portEXIT_CRITICAL(&status_mux);
     return true;
 }
+bool v4_backend_mux_recoverable(void){return mux_mode;}
+probe_result_t v4_backend_recover(void){
+    if(xSemaphoreTake(access,0)!=pdTRUE)return PROBE_NOT_READY;
+    bool ok=false;
+    if(!cdc||failed()||!mux_mode)goto done;
+    /* A lost EXIT acknowledgement may already have returned the probe to REPL. */
+    if(handshake()){ok=true;goto done;}
+    uint32_t epoch=0;
+    for(unsigned phase=0;phase<2;phase++){
+        uint8_t op=phase?3:1,packet[20],chunk[256];
+        uint32_t id=esp_random()|1u;
+        mux_recovery_reply_t reply={0};
+        mux_recovery_packet(packet,op,epoch,id);
+        if(cdc_acm_host_data_tx_blocking(cdc,packet,sizeof packet,1000)!=ESP_OK)goto done;
+        int64_t deadline=esp_timer_get_time()+2000000;
+        bool matched=false;
+        while(!matched&&esp_timer_get_time()<deadline&&!failed()){
+            size_t n=xStreamBufferReceive(rx,chunk,sizeof chunk,pdMS_TO_TICKS(20));
+            for(size_t i=0;i<n;i++)if(mux_recovery_feed(&reply,chunk[i],op,id,&epoch)){matched=true;break;}
+        }
+        if(!matched||failed())goto done;
+    }
+    ok=handshake();
+done:
+    if(ok){mux_mode=false;state("ready",NULL);}
+    else state("quarantined","MUX recovery not proven; old operation remains unknown");
+    xSemaphoreGive(access);
+    return ok?PROBE_OK:PROBE_OUTCOME_UNKNOWN;
+}
 esp_err_t v4_backend_start(void){
     access=xSemaphoreCreateMutex();events=xEventGroupCreate();
     /* CPU-side queue only; CDC DMA buffers and FreeRTOS control stay internal. */
@@ -199,6 +233,7 @@ void v4_backend_attach(unsigned address,usb_device_handle_t device){
     const cdc_acm_host_open_config_t open={.vid=0x0d28,.pid=0x0202,.interface_idx=4,.dev_addr=address,
         .connection_timeout_ms=1500,.out_buffer_size=1024,.in_buffer_size=4096,.event_cb=event,.data_cb=receive};
     xSemaphoreTake(access,portMAX_DELAY);xEventGroupClearBits(events,FAULTS);
+    mux_mode=false;
     esp_err_t err=cdc_acm_host_open(&open,&cdc);
     bool ready=false;
     if(err==ESP_OK){

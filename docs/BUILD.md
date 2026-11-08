@@ -4,6 +4,7 @@
 
 - Windows 10/11 x64 for the supported desktop build; WebView2 and Visual Studio C++ build tools.
 - Node.js 22+ (Node 24 also tested), npm, Rust stable with the MSVC target, Python 3.12 and Git.
+- GCC on PATH (`gcc`, for example MinGW-w64) for Windows host-side HTTP/MUX boundary tests.
 - ESP-IDF **5.5.2** for S3/C6 firmware. Activate its environment; do not hardcode someone else's SDK location.
 - npm and Cargo dependency versions are locked. Direct Python build tools are pinned in `tools/requirements-build.txt`; upstream Python transitive dependencies are not fully locked yet, so this is not a bit-reproducibility claim.
 
@@ -13,12 +14,26 @@ Run from the repository root:
 
 ```powershell
 python tools/prepare-upstream.py
+python desktop/mklink-wireless-config/tools/stage_remote_runtime.py --source .deps/upstream --destination .deps/remote-staged
 python -m venv .venv
 .venv/Scripts/python -m pip install -r tools/requirements-build.txt
-.venv/Scripts/python -m pip install ".deps/sdk-0.4.0[remote]"
+.venv/Scripts/python -m pip install ".deps/remote-staged[remote]"
 ```
 
 The helper downloads the official v0.4.0 SDK archive and verifies its fixed SHA-256, then fetches the exact backend source commit listed in `adapter/upstream.json`. It writes only `.deps/`; it does not install a skill or edit the user's MCP. Offline inputs can be supplied with `--sdk-archive` and `--source`. A source checkout must contain the exact pinned commit. The SDK and upstream backend have different versions and roles.
+
+The private backend pins `3905a68bceaf6d863b9159de2a390e161788af48` (0.4.3, PR #72),
+verified against the official default branch on 2026-11-08. It includes PR #70;
+PR #72 changes the upstream desktop startup, with no backend/protocol diff.
+This is an exact tested pin, not a floating `latest` dependency.
+For an existing dependency tree pinned to an older commit, prepare a fresh directory
+with `--directory .deps/pr70` and use its `upstream` and SDK paths below; preserve
+the old stage. Verification takes `--runtime <fresh-stage>` (default
+`.deps/remote-staged`) and tests the adapted backend, not the old asset SDK.
+The target helper also uses this stage and the same Remote transport adapter.
+The 0.4.0 archive supplies only verified FLM/pack assets; its Python runtime is
+not installed alongside the new backend. Rebuild both private binaries for a
+release; an existing packaged helper is not updated by changing this source.
 
 ## Frontend and offline verification
 
@@ -54,9 +69,10 @@ These are maintainer build steps; review third-party binary distribution terms b
 $app = Resolve-Path desktop/mklink-wireless-config
 $python = (Resolve-Path .venv/Scripts/python.exe).Path
 $sdk = (Resolve-Path .deps/sdk-0.4.0).Path
+$runtime = (Resolve-Path .deps/remote-staged).Path
 & "$app/tools/build-device-tool.ps1" -Python $python
-& "$app/tools/build-target-tool.ps1" -SdkRoot $sdk -Python $python
-& $python "$app/tools/stage_remote_runtime.py" --source .deps/upstream --destination .deps/remote-staged
+& "$app/tools/build-target-tool.ps1" -SdkRoot $sdk -RuntimeRoot $runtime -Python $python
+# Reuse the verified stage above; do not overwrite it.
 python -m venv .remote-venv
 .remote-venv/Scripts/python -m pip install -r tools/requirements-build.txt
 .remote-venv/Scripts/python -m pip install ".deps/remote-staged[remote]"
@@ -65,7 +81,8 @@ python -m venv .remote-venv
 
 To check STOP scheduling, measurement tail accounting and startup echo handling
 without hardware, run `tests/run_staged_mux_slot.py`, `tests/run_staged_mux_tail.py`,
-`tests/run_staged_watch_read_error.py` and `tests/run_staged_dump_echo.py` with the remote Python environment and
+`tests/run_staged_watch_read_error.py`, `tests/run_staged_dump_echo.py` and
+`tests/run_staged_pr70.py` with the remote Python environment and
 `PYTHONPATH` set to the absolute path of `.deps/remote-staged`.
 
 Use a fresh staging directory if it already exists; the script intentionally refuses to overwrite an existing stage. Both `builtin_flm/manifest.json` and `builtin_packs/manifest.json` must exist in the supplied SDK assets.

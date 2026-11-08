@@ -3,7 +3,8 @@ import binascii
 import struct
 import unittest
 
-from mklink.dump_memory import DumpMemoryParser, MAGIC, build_dump_mem_command
+from mklink.dump_memory import DumpMemoryParser, MAGIC
+from mklink.legacy_dump import command_for as build_dump_mem_command
 
 
 class EchoTest(unittest.TestCase):

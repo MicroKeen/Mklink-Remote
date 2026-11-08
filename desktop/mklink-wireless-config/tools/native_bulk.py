@@ -31,21 +31,24 @@ def finite_parser(region_sizes,command):
 def read_flash_binary(device,address,size,progress=None):
     if type(address) is not int or type(size) is not int or address%4 or not 4096<=size<=524288 or not FLASH<=address<address+size<=END:
         raise ValueError('Native binary Flash read requires aligned4KiB..512KiB within STM32F411')
-    from mklink.dump_memory import DumpMemoryStreamSession,DumpSampleAssembler,build_dump_mem_command
+    from mklink.dump_memory import DumpSampleAssembler,DumpMemoryBusyError
+    from mklink.legacy_dump import LegacyDumpSession,command_for
+    from mklink._types import DeviceState
     bridge=device._bridge;link=bridge.link
+    if bridge.state is not DeviceState.READY or getattr(getattr(bridge,'_mux',None),'sampling',False):
+        raise DumpMemoryBusyError('Finite native dump requires an idle connection')
     bridge._leave_multiplex() # Normal acknowledged native mode transition.
-    bridge.supports_multiplex() # Resolve native capabilities before USB timing.
+    bridge._get_firmware_capabilities() # Resolve native capabilities before USB timing.
     measured=getattr(link,'usb_metrics_supported',False) is True
     if measured:
         begin=link.call('probe.metrics.reset')
         if begin['rx_pending']:raise RuntimeError('USB contains an undrained previous stream; no new dump sent')
-    session=DumpMemoryStreamSession(bridge,[(address,size)],0.0,allow_legacy_bulk=True)
-    session.parser=finite_parser([size],build_dump_mem_command([(address,size)],0.0).encode())
+    session=LegacyDumpSession(bridge,[(address,size)],0.0)
+    session.parser=finite_parser([size],command_for([(address,size)],0.0).encode())
     assembler=DumpSampleAssembler([size],ordered=True)
     result=None;metrics={};started=time.perf_counter();deadline=started+180;last_progress=started
     try:
         session.start()
-        if session._mux_watch is not None:raise RuntimeError('Finite B1 dump expected; continuous sampler not accepted')
         while time.perf_counter()<deadline:
             frames=session.read_frames(max_bytes=1048576)
             if frames:last_progress=time.perf_counter()

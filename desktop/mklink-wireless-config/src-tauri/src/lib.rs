@@ -100,7 +100,7 @@ impl Service {
         let mut link = self.link.lock().unwrap();
         *link = None;
         let mut p = serialport::new(port, 115200)
-            .timeout(Duration::from_millis(100))
+            .timeout(Duration::from_secs(1))
             .dtr_on_open(false)
             .open()
             .map_err(|e| format!("无法打开 {port}：{e}"))?;

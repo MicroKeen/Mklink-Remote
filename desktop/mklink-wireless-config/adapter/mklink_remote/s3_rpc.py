@@ -54,35 +54,46 @@ class Endpoint:
             raise ConnectionError('S3 operation timeout; outcome unknown, no replay') from None
 
     def rpc(self, method, params):
+        http_status = None
         try:
             if self.ble:
                 return self._await(self.ble.rpc(method, params))
             ident = uuid.uuid4().hex
             body = json.dumps(dict(v=1, id=ident, method=method, params=params), separators=(',', ':')).encode()
             with self.http_lock:
-                if self.http is None or time.monotonic() - self.http_last_use > 1:
-                    if self.http is not None:
-                        self.http.close()
-                    origin = urlsplit(self.node['address'])
-                    cls = {'http': http.client.HTTPConnection, 'https': http.client.HTTPSConnection}[origin.scheme]
-                    self.http = cls(origin.hostname, origin.port, timeout=30)
-                try:
-                    self.http.request('POST', '/api/v1/rpc', body,
-                                      {'Authorization': 'Bearer ' + self.node['token'],
-                                       'Content-Type': 'application/json'})
-                    with self.http.getresponse() as response:
-                        if not 200 <= response.status < 300:
-                            raise ConnectionError('S3 HTTP request rejected')
-                        expected = response.length
-                        payload = response.read(65537)
-                        if len(payload) > 65536 or (expected is not None and len(payload) != expected):
-                            raise ValueError('Oversized or incomplete S3 response')
-                    self.http_last_use = time.monotonic()
-                except BaseException:
-                    # An interrupted POST may already have consumed FIFO bytes.
-                    self.http.close()
-                    self.http = None
-                    raise
+                for attempt in range(2):
+                    if self.http is None or time.monotonic() - self.http_last_use > 1:
+                        if self.http is not None:
+                            self.http.close()
+                        origin = urlsplit(self.node['address'])
+                        cls = {'http': http.client.HTTPConnection, 'https': http.client.HTTPSConnection}[origin.scheme]
+                        self.http = cls(origin.hostname, origin.port, timeout=30)
+                    try:
+                        self.http.request('POST', '/api/v1/rpc', body,
+                                          {'Authorization': 'Bearer ' + self.node['token'],
+                                           'Content-Type': 'application/json'})
+                        with self.http.getresponse() as response:
+                            http_status = response.status
+                            if (attempt == 0 and response.status == 408 and
+                                    response.getheader('X-Mklink-RPC-Executed') == 'no'):
+                                # Only the gateway's pre-dispatch rejection proves no execution.
+                                self.http.close()
+                                self.http = None
+                                continue
+                            if not 200 <= response.status < 300:
+                                raise ConnectionError('S3 HTTP request rejected')
+                            expected = response.length
+                            payload = response.read(65537)
+                            if len(payload) > 65536 or (expected is not None and len(payload) != expected):
+                                raise ValueError('Oversized or incomplete S3 response')
+                        self.http_last_use = time.monotonic()
+                    except BaseException:
+                        # An interrupted POST may already have consumed FIFO bytes.
+                        if self.http is not None:
+                            self.http.close()
+                        self.http = None
+                        raise
+                    break
             result = json.loads(payload)
             if result.get('v') != 1 or result.get('id') != ident:
                 raise ValueError('S3 reply identity mismatch')
@@ -91,7 +102,8 @@ class Endpoint:
             return result['data']
         except Exception:
             # Credential-bearing request/response objects never enter runtime logs.
-            raise ConnectionError('S3 RPC failed: ' + method + '; no replay') from None
+            status = f'; HTTP {http_status}' if http_status is not None and not 200 <= http_status < 300 else ''
+            raise ConnectionError('S3 RPC failed: ' + method + status + '; no replay') from None
 
     def close(self):
         with self.http_lock:

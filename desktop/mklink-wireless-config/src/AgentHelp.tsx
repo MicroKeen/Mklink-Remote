@@ -1,14 +1,15 @@
+import pinText from '../adapter/upstream.json?raw';
+const pin=JSON.parse(pinText) as {upstream_commit:string};
 export default function AgentHelp(){
   return <div className="help-start">
-    <div className="help-callout"><strong>让 Agent 操作 Mklink Remote</strong><p>工作台与命令行共用本机服务。Agent 可以配置节点、安装默认固件、管理 OTA、读取诊断、执行目标任务和接入共享调试，无需模拟鼠标操作。</p><p>先打开工作台；没有界面时运行 <code>mklink-remote serve</code>。随后打开的工作台会接入同一服务。</p></div>
+    <div className="help-callout"><strong>让 Agent 操作 Mklink Remote</strong><p>优先使用 CLI 或共享后台。工作台与 CLI 共用本机服务，原版 MKLink MCP 通过注册站点接入；不需要模拟鼠标，也不覆盖原版技能。</p><p>本包后台绑定 <code>{pin.upstream_commit.slice(0,7)}</code>（0.4.3，含 PR #70 / #72）。运行中的服务以 <code>mklink-remote call capabilities</code> 返回为准；版本不符时，结束任务并退出会话后再重启 Remote。</p></div>
     <div className="help-steps">
-      <article><span>01</span><h3>发现能力与设备</h3><pre>{'mklink-remote help\nmklink-remote list_ports\nmklink-remote list_ble'}</pre><p>help 返回 JSON 命令目录、参数示例和节点 RPC 方法。所有命令输出 JSON，失败返回非零退出码。</p></article>
-      <article><span>02</span><h3>通过同一服务操作</h3><pre>{'mklink-remote call connect_serial --params-file connect.json\nmklink-remote call rpc --params-file status.json'}</pre><p>connect.json：<code>{'{"port":"实际串口"}'}</code></p><p>status.json：<code>{'{"method":"get_status","params":{}}'}</code></p><p>配置、热点名称与密码、STA、中心接入均通过 rpc 的 set_config / apply_network 等既有方法操作，保留版本与操作权检查。</p></article>
-      <article><span>03</span><h3>原版技能加入无线会话</h3><p>通过 shared_control 的 attach 操作接入节点，检查返回的后台实例与技能站点。原版 MKLink 远程 MCP 通过已注册站点连接；不替换技能，不修改 MCP。</p><p>原版 MCP 已启动时，新增或变更站点后需重新加载它。S3 管理密钥与远程站点令牌是两份凭据，不要混用。</p></article>
-      <article><span>04</span><h3>查询任务，再决定下一步</h3><pre>{'mklink-remote install_job\nmklink-remote target_job\nmklink-remote diagnostics_query'}</pre><p>默认固件安装、节点 OTA 与目标操作启动后查询任务终态。超时可能表示结果未知；先读取状态、核对文件摘要与目标身份，不能直接重发写入。</p></article>
+      <article><span>01</span><h3>先查状态</h3><pre>{'mklink-remote help\nmklink-remote call capabilities\nmklink-remote service_status\nmklink-remote target_job'}</pre><p>先打开工作台；无界面时运行 <code>mklink-remote serve</code>。已有连接或任务时先核对归属，不另开独占连接。</p></article>
+      <article><span>02</span><h3>连接并核对能力</h3><pre>{'mklink-remote call connect_lan --params-file connect.json\nmklink-remote call rpc --params-file status.json'}</pre><p>connect.json 包含 <code>url</code> 与 <code>token</code>。status.json：<code>{'{"method":"get_status","params":{}}'}</code>。也可使用 connect_serial / connect_ble，参数以 help 为准。</p><p>先核对节点、V4 状态和目标身份。SuperWatch 由后台检查实际能力及采样时基，不以固件版本号代替能力检查。</p></article>
+      <article><span>03</span><h3>复用共享调试</h3><p>通过 shared_control 的 attach 接入工程，使用匹配的 AXF / ELF；核对返回的后台实例与站点，再让原版远程 MCP 连接。支持站点重载的客户端可重载配置，旧客户端需重启。</p><p>自己启动的任务要负责收尾；仅订阅他人采集时只退出自己的客户端。切换链路前先结束该节点的全部调试会话。</p></article>
+      <article><span>04</span><h3>等待停止完成</h3><pre>{'mklink-remote stop_target\nmklink-remote target_job\nmklink-remote diagnostics_query'}</pre><p>stop_target 只用于本服务启动的独立目标任务。返回 accepted 只表示请求已接受，必须继续查询 target_job，直到 running=false。共享后台任务通过其自身接口停止和查询。</p><p>保持连接直到尾部收完、任务结束。失败或 outcome_unknown 时先保存诊断并核对后台、租约和队列，不能重放旧命令或强行清空数据。</p></article>
     </div>
-    <div className="help-callout"><strong>客户端身份独立，硬件状态共享</strong><p>CLI 控制的是工作台的同一服务；原版 MKLink MCP 通过远程站点持有独立客户端身份。RTT 等缓存可供双方订阅，复位、烧录和停止采集会影响同一目标。切换无线链路前，结束该节点的全部调试会话。</p><p>AI 仅订阅已有采集时，退出只释放自己的订阅；AI 自己启动并持有的采集，结束时可能一并停止。持续共同观察时，可先在图形界面启动采集。</p></div>
-    <div className="help-callout"><strong>日志诊断</strong><p>左侧“日志诊断”按 Info、Warning、Error 筛选，支持搜索、暂停刷新、复制和导出。Agent 用 diagnostics_query 查询，用 diagnostics_export 导出 TXT 或 JSON；可指定 level、search、directory。日志缓存最多保留 5000 条，密码和令牌在进入缓存前脱敏。</p></div>
-    <div className="help-callout"><strong>凭据与文件</strong><p>参数用 UTF-8 JSON 文件或 <code>--params-file -</code> 从标准输入传递。不要把密钥放在命令行、版本库或日志。CLI 的文件选择使用明确路径；export_logs / export_firmware 可指定 directory。浏览器入口返回本机私有 URL，请勿公开分享。</p></div>
+    <details className="disclosure"><summary>采集质量与性能边界</summary><div className="panel-body"><p>同时记录请求速率、目标时间戳速率、接收速率、解析丢帧、CRC 错误、队列变化及停止结果。没有返回的统计是“未验证”，不能记作零丢帧；解析丢帧也不等于丢失样本总数。</p><p>从低负载开始，逐步提高；持续积压时降低速率或通道数据量，不自动降采样后宣称原速率通过。Wi-Fi 800 Hz 尚未稳定通过，USB Full Speed、信号和处理开销都会影响体验。STOP 后 RAM 读回须在已确认健康、无在途目标任务时执行，不因请求超时就反复重试。</p></div></details>
+    <details className="disclosure"><summary>OTA、写入与凭据</summary><div className="panel-body"><p>安装与 OTA 启动后查询 install_job；备用槽写完不等于新固件已生效，还需校验镜像、激活、重连并确认版本。写入要有明确范围、已核验备份及恢复方案；结果未知时禁止重复写入。</p><p>参数用 UTF-8 JSON 文件或 <code>--params-file -</code> 传入。密钥不放命令行、截图或日志；S3 管理密钥与远程站点令牌不可混用。本机工作台 URL 也不公开分享。</p><p>日志页支持筛选和导出；Agent 使用 diagnostics_query / diagnostics_export。未经指示不更改电脑 Wi-Fi，也不更新原 MKLink 安装或板端固件。</p></div></details>
   </div>;
 }

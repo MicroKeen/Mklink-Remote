@@ -10,6 +10,8 @@ class PublicationTests(unittest.TestCase):
         self.assertIn('desktop/mklink-wireless-config/src/App.tsx',files)
         self.assertIn('boards/third-party-esp32-s3-n16r8/firmware/wireless_gateway/components/probe_protocol/probe_protocol.c',files)
         self.assertNotIn('desktop/mklink-wireless-config/src-tauri/src/bin/node-update-check.rs',files)
+        for name in ('http_reply_stubs.h','test_http_diagnostics.c','test_http_reply.c','test_mux_recovery.c'):
+            self.assertIn('tests/'+name,files)
     def test_synthetic_key_is_detected_without_value_in_report(self):
         secret='gh'+'p_'+'A'*36
         report=audit.audit(['README.md'],lambda _:secret.encode())

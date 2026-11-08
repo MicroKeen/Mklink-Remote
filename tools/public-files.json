@@ -69,7 +69,11 @@
     "tests/c6-network-fixture/README.md",
     "tools/*.ps1",
     "boards/third-party-esp32-s3-n16r8/firmware/wireless_gateway/components/**",
-    "tests/test_publication.py"
+    "tests/test_publication.py",
+    "tests/http_reply_stubs.h",
+    "tests/test_http_diagnostics.c",
+    "tests/test_http_reply.c",
+    "tests/test_mux_recovery.c"
   ],
   "exclude": [
     "**/__pycache__/**",

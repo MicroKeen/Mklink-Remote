@@ -2,35 +2,22 @@
 substitute and no RT-Thread TCB interpretation on the FreeRTOS target.
 """
 import hashlib,json,math,statistics,time,uuid,struct
-from contextlib import contextmanager
 from pathlib import Path
 from target_ops import RAM,RAM_END
 
-@contextmanager
-def retained_rtt_tail(device,address):
-    """Keep the SDK's deliberately cleared startup queue during Trace handoff.
+def stop_trace_recorder(session):
+    """Stop the owned recorder once, leaving its RTT subscription to drain."""
+    rtt = session._session
+    with rtt.transport._commands:
+        manager = rtt.manager
+        if any(consumer is not rtt and up & (1 << rtt._channel)
+               for consumer, (up, _) in manager.consumers.items()):
+            raise RuntimeError('Cannot stop a recorder shared with another consumer')
+        if rtt._channel in manager.recorders:
+            rtt.send_input(b'\x02')
+            manager.recorders.discard(rtt._channel)
+        session._tasklist_requested = True
 
-    Native MUX parses and validates every frame as usual. Only this owned
-    session's initial channel1 queue is retained for its first normal read.
-    """
-    transport=device._bridge.enable_multiplex()
-    if transport is None:raise RuntimeError('Native MUX RTT required for final Trace tail')
-    original=transport.drain;starting=True;queued=[];started=False
-    def retain(frame_type,channel=None):
-        frames=original(frame_type,channel)
-        if frame_type==0x40 and channel==1:
-            if starting:queued.extend(frames);return []
-            if queued:frames=queued[:]+frames;queued.clear()
-        return frames
-    transport.drain=retain
-    try:
-        device.rtt_start(addr=hex(address),channel=1,channels=[1],mode=1)
-        started=True;starting=False
-        yield
-    finally:
-        try:
-            if started:device.rtt_stop()
-        finally:transport.drain=original
 
 def bounds(address,size,duration):
     if type(address) is not int or address%4 or type(size) is not int or not 4<=size<=256 or not RAM<=address<address+size<=RAM_END:
@@ -75,15 +62,9 @@ def capture_watch(device,address,size,duration,period,*,root,rtt_address=None,st
                 if progress:progress('superwatch',sample_count,max(1,round(duration/period)))
                 time.sleep(.005)
             active_seconds=time.monotonic()-started
-            tail_started=time.monotonic();session.stop()
-            # The stop ACK follows preceding events on the native byte stream.
-            # Drain native decoded frames which arrived while awaiting that ACK;
-            # do not silently discard the buffered tail from a fast sampler.
-            for _ in range(128):
-                tail=session._mux_watch.read_frames()
-                if not tail:break
-                consume(tail)
-            else:raise RuntimeError('Native SuperWatch tail exceeded bounded drain budget')
+            tail_started=time.monotonic()
+            if progress:progress('stopping',0,0)
+            session.stop(on_watch_tail=consume)
             if rtt_started:
                 for channel,chunk in device.rtt_read_channels(.05).items():
                     if channel==2:rtt_bytes.extend(chunk)
@@ -99,8 +80,8 @@ def capture_watch(device,address,size,duration,period,*,root,rtt_address=None,st
     span=(timestamps[-1]-timestamps[0])/1e6 if len(timestamps)>1 else 0
     ordered=sorted(deltas)
     return dict(native_push=True,host_memory_polling=False,address=address,region_bytes=size,requested_hz=1/period,
-                seconds=round(elapsed,3),capture_active_seconds=round(active_seconds,3),setup_ms=round((started-setup_started)*1000,3),stop_and_drain_ms=drain_ms,samples=sample_count,distinct_values=len(values),payload_bytes=wire_bytes,
-                received_samples_s=round(sample_count/elapsed,2),target_samples_s=round((sample_count-1)/span,2) if span>0 else None,
+                seconds=round(elapsed,3),capture_active_seconds=round(active_seconds,3),setup_ms=round((started-setup_started)*1000,3),stop_and_drain_ms=drain_ms,mux_stop_verified=True,samples=sample_count,distinct_values=len(values),payload_bytes=wire_bytes,
+                received_samples_s=round(sample_count/elapsed,2) if elapsed>0 else None,target_samples_s=round((sample_count-1)/span,2) if span>0 else None,
                 median_target_period_us=statistics.median(deltas) if deltas else None,
                 p95_target_period_us=ordered[math.ceil(len(ordered)*.95)-1] if ordered else None,
                 stats=stats,preview=preview,rtt_ch2_hex=bytes(rtt_bytes).hex(),capture_path=str(path),
@@ -115,7 +96,7 @@ def capture_trace(device,address,duration,*,root,stop=None,progress=None):
     started=time.monotonic();events=0;data_bytes=0;written=0;last={};preview=[];event_types={};closed=False
     active_seconds=0;drain_seconds=0;first_event_us=None;last_event_us=None
     active_decoder_drops=0;radio_decoder_drops=0;usb_pending_after_drain=None
-    recording_start_us=None;recording_stop_us=None;recording_events=0;prefix_events=0;target_tail_bytes=0
+    recording_start_us=None;recording_stop_us=None;recording_events=0;prefix_events=0
     try:
         with path.open('x',encoding='utf-8') as sink:
             def consume(batch):
@@ -143,11 +124,9 @@ def capture_trace(device,address,duration,*,root,stop=None,progress=None):
                 if progress:progress('rtos_trace',round((time.monotonic()-started)*1000),round(duration*1000))
             active_seconds=time.monotonic()-started
             active_decoder_drops=last.get('dropped_bytes',0)
-            # Use the native Recorder STOP, keep its forwarder/decoder alive,
-            # and drain the PSRAM backlog before ending the SDK stream. The
-            # unmodified SDK stop alone discards a slow radio's buffered tail.
+            # Drain through the native shared RTT consumer before unsubscribing.
             session=device._systemview_session
-            device._bridge._write_raw(session._COMMAND_STOP)
+            stop_trace_recorder(session)
             drain_start=time.monotonic();quiet_since=None
             while time.monotonic()-drain_start<45:
                 batch=device.systemview_read(.1);consume(batch)
@@ -162,32 +141,8 @@ def capture_trace(device,address,duration,*,root,stop=None,progress=None):
             else:raise RuntimeError('Recorder tail did not quiesce within45seconds; capture incomplete')
             drain_seconds=time.monotonic()-drain_start
             radio_decoder_drops=last.get('dropped_bytes',0)
-            parser=device._systemview_parser
+        device.systemview_stop()
         closed=True
-        # Recorder STOP was already sent once above. Finish the forwarder with
-        # the SDK's acknowledged text stop and identity, without issuing a
-        # second binary STOP into a potentially restored Pika command parser.
-        if not device._bridge._stop_stream_and_sync(b'SystemView.stop()\n'):
-            device._bridge.link.poisoned=True
-            raise RuntimeError('Native SystemView terminal synchronization failed; no reuse')
-        session._running=False;session._prefetched.clear();session._tasklist_requested=False
-        device._systemview_session=None;device._systemview_parser=None
-        # V4 can stop its forwarder before the target's final TraceStop packet
-        # is consumed. Drain that stopped recorder's channel via native MUX RTT,
-        # without sending another Recorder START or inventing decoded events.
-        with retained_rtt_tail(device,address):
-            with path.open('a',encoding='utf-8') as sink:
-                began=time.monotonic();quiet_since=None
-                while time.monotonic()-began<15:
-                    raw=device.rtt_read_channels(.1).get(1,b'')
-                    if raw:
-                        target_tail_bytes+=len(raw);quiet_since=None
-                        consume(dict(events=parser.feed(raw),bytes_read=len(raw),synced=parser.synced,
-                            cpu_freq=parser.cpu_freq,task_names=dict(parser._task_names),isr_names=dict(parser._isr_names),
-                            dropped_bytes=parser.dropped_bytes,dropped_packets=parser.dropped_packets))
-                    elif quiet_since is None:quiet_since=time.monotonic()
-                    elif time.monotonic()-quiet_since>=.5:break
-                else:raise RuntimeError('Stopped target Trace buffer did not quiesce')
         # ARM32 SEGGER_RTT.h: ID16 + two int counts, followed by24-byte UP
         # descriptors {name,buffer,size,WrOff,RdOff,flags}; channel1 at+48.
         header=device.read_memory(address,24)
@@ -198,7 +153,7 @@ def capture_trace(device,address,duration,*,root,stop=None,progress=None):
         if not (RAM<=buffer<buffer+capacity<=RAM_END and write<capacity and read<capacity):
             raise RuntimeError('Invalid final target RTT descriptor')
         pending=(write-read)%capacity
-        if pending or recording_stop_us is None:raise RuntimeError(f'Trace incomplete: target_pending={pending}, stop_marker={recording_stop_us is not None}, tail_bytes={target_tail_bytes}; raw capture={path}')
+        if pending or recording_stop_us is None:raise RuntimeError(f'Trace incomplete: target_pending={pending}, stop_marker={recording_stop_us is not None}; raw capture={path}')
     finally:
         if not closed:device.systemview_stop()
     elapsed=time.monotonic()-started
@@ -207,14 +162,14 @@ def capture_trace(device,address,duration,*,root,stop=None,progress=None):
     return dict(native_systemview=True,rtos='FreeRTOS',task_name_source='SEGGER FreeRTOS task metadata; no RT-Thread TCB resolver',
                 seconds=round(elapsed,3),capture_active_seconds=round(active_seconds,3),tail_drain_seconds=round(drain_seconds,3),
                 setup_ms=round((started-setup_started)*1000,3),raw_target_span_seconds=round(raw_span,6),
-                prefix_events=prefix_events,recording_events=recording_events,target_tail_bytes=target_tail_bytes,
+                prefix_events=prefix_events,recording_events=recording_events,
                 target_ring_pending=pending,trace_stop_verified=True,
                 usb_pending_after_drain=usb_pending_after_drain,active_decoder_dropped_bytes=active_decoder_drops,
                 stop_decoder_dropped_bytes=radio_decoder_drops-active_decoder_drops,
                 target_tail_decoder_dropped_bytes=last.get('dropped_bytes',0)-radio_decoder_drops,
                 target_span_seconds=round(span,6),events=events,bytes=data_bytes,events_s=round(events/elapsed,2),
                 target_events_s=round(recording_events/span,2) if span>0 else None,bytes_s=round(data_bytes/elapsed,2),
-                tail_drained=True,terminal_identity_verified=True,
+                tail_drained=True,mux_stop_verified=True,
                 synced=last.get('synced',False),cpu_freq=last.get('cpu_freq'),task_names=last.get('task_names',{}),
                 isr_names=last.get('isr_names',{}),dropped_bytes=last.get('dropped_bytes',0),dropped_packets=last.get('dropped_packets',0),
                 event_types=event_types,preview=preview,start=info,capture_path=str(path),capture_sha256=hashlib.sha256(path.read_bytes()).hexdigest())

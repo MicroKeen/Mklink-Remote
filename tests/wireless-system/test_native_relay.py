@@ -6,9 +6,9 @@ import sys
 import tempfile
 import threading
 import unittest
-from unittest.mock import patch
-sys.path.insert(0,str(Path(__file__).resolve().parents[2]/'desktop/mklink-wireless-config/tools'))
-from mklink_wireless import WirelessLink,WirelessSerial,WirelessBridge
+from unittest.mock import patch, Mock
+sys.path.insert(0,str(Path(__file__).resolve().parents[2]/'desktop/mklink-wireless-config/adapter'))
+from mklink_remote.s3_transport import WirelessLink,WirelessSerial,WirelessBridge
 from mklink._types import DeviceState
 
 class FakeRpc:
@@ -37,6 +37,30 @@ class FakeRpc:
         raise AssertionError(method)
 
 class NativeRelayTests(unittest.TestCase):
+    def test_new_connection_recovers_known_mux_once_without_replaying(self):
+        class Recover(FakeRpc):
+            def __init__(self):super().__init__();self.recovered=False
+            def __call__(self,method,p):
+                if method=='probe.recover':
+                    self.methods.append(method);assert p['generation']==7
+                    self.recovered=True;return dict(generation=8,old_outcome_resolved=False)
+                value=super().__call__(method,p)
+                if method=='get_status':value['probe']['ready']=self.recovered
+                if method=='get_probe_transport':value.update(state='ready' if self.recovered else 'outcome_unknown',generation=8 if self.recovered else 7,mux_recovery_supported=True,mux_recoverable=True)
+                return value
+        rpc=Recover();link=WirelessLink(rpc,'020000123456');link.acquire()
+        self.assertEqual(link.generation,8);self.assertEqual(rpc.methods.count('probe.recover'),1)
+        self.assertEqual(rpc.writes,[]);link.close()
+    def test_unknown_legacy_stream_never_attempts_mux_recovery(self):
+        class Legacy(FakeRpc):
+            def __call__(self,m,p):
+                v=super().__call__(m,p)
+                if m=='get_status':v['probe']['ready']=False
+                if m=='get_probe_transport':v.update(state='outcome_unknown',mux_recovery_supported=True,mux_recoverable=False)
+                return v
+        rpc=Legacy()
+        with self.assertRaises(RuntimeError):WirelessLink(rpc,'020000123456').acquire()
+        self.assertNotIn('control.acquire',rpc.methods);self.assertNotIn('probe.recover',rpc.methods)
     def test_negotiated_psram_window_preserves_unconsumed_native_bytes(self):
         class Extended(FakeRpc):
             def __call__(self,method,params):
@@ -62,17 +86,44 @@ class NativeRelayTests(unittest.TestCase):
         self.assertEqual(rpc.sizes,[2048,2048,1]);self.assertEqual(bytes(rpc.file),b'a'*4097);link.close()
     def test_native_deadline_covers_radio_rpc_and_preserves_long_flash_budget(self):
         link=WirelessLink(FakeRpc(),'020000123456');bridge=WirelessBridge(link)
-        with patch('mklink.bridge.MKLinkSerialBridge.send_command',return_value='ok') as send:
-            self.assertEqual(bridge.send_command('cmd.read_ram(0,4)',timeout=10),'ok')
-            self.assertEqual(send.call_args.kwargs['timeout'],60)
-            bridge.send_command('cmd.long_operation()',timeout=600)
-            self.assertEqual(send.call_args.kwargs['timeout'],600)
+        bridge._ctx.state=DeviceState.READY
+        bridge._serial=Mock()
+        for requested,respond_after in ((10,30),(600,90)):
+            clock=[0.0]
+            def wait(timeout):
+                clock[0]+=1
+                if clock[0]>=respond_after:
+                    bridge._response_buffer.append('OK\n>>> ')
+                    return True
+                return False
+            bridge._prompt_event=Mock(wait=wait)
+            with patch('mklink.bridge.time.monotonic',side_effect=lambda:clock[0]):
+                self.assertIn('OK',bridge.send_command('query',timeout=requested))
+        self.assertEqual(bridge._serial.write.call_count,2)
     def test_native_timeout_is_not_retried_and_records_only_rpc_metadata(self):
         link=WirelessLink(FakeRpc(),'020000123456');bridge=WirelessBridge(link)
         link.recent_rpc.append(dict(method='probe.stream.read',ms=12000,ok=True))
         with patch('mklink.bridge.MKLinkSerialBridge.send_command',side_effect=TimeoutError('timeout')) as send:
             with self.assertRaises(TimeoutError) as error:bridge.send_command('cmd.read_ram(0,4)')
         send.assert_called_once();self.assertIn('probe.stream.read',str(error.exception.__notes__))
+    def test_ble_heartbeat_tracking_does_not_reserve_command_slot(self):
+        bridge = WirelessBridge(self.link)
+        self.assertFalse(self.link.duplex)
+        self.assertTrue(bridge.mux_background_heartbeats)
+
+    def test_reply_observer_handles_fragmentation_and_crc_without_changing_bytes(self):
+        from mklink.mux import packet
+        serial = WirelessSerial(self.link)
+        good = packet(0xB5, 7, 12, b'\0abcd')
+        bad = good[:-1] + bytes([good[-1] ^ 1])
+        with patch('mklink.connection_diagnostics.event') as event:
+            serial._observe_replies(bad + good[:11])
+            event.assert_not_called()
+            serial._observe_replies(good[11:])
+            event.assert_called_once_with('remote.mux_reply', opcode=0xB5, epoch=7, request=12, status=0)
+        self.assertEqual(serial._trace_rx, b'')
+        serial.close();self.link.close()
+
     def setUp(self):self.rpc=FakeRpc();self.link=WirelessLink(self.rpc,'020000123456');self.link.acquire()
     def test_binary_receive_is_not_decoded_or_discarded(self):
         s=WirelessSerial(self.link);self.rpc.input=b'\0\xffMLX1\r\n>>>'

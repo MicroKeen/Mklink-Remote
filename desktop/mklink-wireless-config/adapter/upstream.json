@@ -1,71 +1,47 @@
 {
-  "upstream_commit": "3cc474bbaf4ac511945829fa554875d75a6f9112",
+  "upstream_commit": "3905a68bceaf6d863b9159de2a390e161788af48",
   "adaptation_origin": "8799255d5105376c8a5eef93e51945017fac4edc",
   "scope": "Remote server only; original skill and MCP excluded",
   "files": {
-    "mklink/bridge.py": {
-      "base_sha256": "abddeec100e5d5ff2c584a63d021e141bde64e67dd5857628ca3b922e99fa468",
-      "server_sha256": "c9098d935914e7c34cf7cf0337954d67d520def8a18aa514f81c04485630f700"
+    "mklink/dump_benchmark.py": {
+      "base_sha256": "14369ab9fab876c365248239497206c426e16689bbd278cc933707c8fd150883",
+      "server_sha256": "c4c1fe2681ef723d8d0da007212a7ca64855ffeabc981bdd5086129a600b3633"
     },
-    "mklink/device.py": {
-      "base_sha256": "f0aecc4ed506ac78fb0fa4e958f3a26cc9a7a0df3694600a31b1c1c67fbead30",
-      "server_sha256": "872da874cf7c76b2180dcc0a4e1f96458cb3f7946602551a05827682056dca8f"
+    "mklink/dump_memory.py": {
+      "base_sha256": "b29508fe68de141f77265fe440f8e38890d79c39ea10c6305952d6a88bfc6c3a",
+      "server_sha256": "ccd5aa3acbbaa38c5b14c9feb0cd55f839fd7e5cbba2e051630ef7d1a67809eb"
     },
-    "mklink/flash.py": {
-      "base_sha256": "af4eecaac559a11f31b4711bb62a8ae011a3f1e7a5d300cc954285513cca09c1",
-      "server_sha256": "a1ae53104ca2245299edfe6723fbba9a395281e938d864e7a507356e82a77145"
+    "mklink/mux_bulk_watch.py": {
+      "base_sha256": "bb07fb730a5555de8868dd7cac2285e41337b17782b0ab5fbeab1fd868afd2e5",
+      "server_sha256": "e4979de859660400c15bfbf0d68aaefcb1ca7ccd87380ee33dd00c921e446a83"
     },
-    "mklink/mux.py": {
-      "base_sha256": "62dd4bff831ccd8e0ea63effac2806edf4fb31dca21131c2fcf826284849e591",
-      "server_sha256": "d861a16c526b38d882d20e1699450a31f4a5eaaf13ea49f105399d5590a7ddc2"
-    },
-    "mklink/probe_volumes.py": {
-      "base_sha256": "f741e1978f083465f01ed1fe32794b05206d9559a00d4a4816089f7d4d83c614",
-      "server_sha256": "b4f1b9b8551ab953ed7451fd3ccff4c6a671157c2bc7ec46ebfe6ecc7c64d4c2"
+    "mklink/mux_watch.py": {
+      "base_sha256": "b89ddf3779c039959c557808730c55c4b8aed790b11a13cff0cc897953ffee33",
+      "server_sha256": "244f872cb63277a58f5b1e14f4bb2a719dd092ce1dae0211d568b7a71acf87d7"
     },
     "mklink/probes.py": {
-      "base_sha256": "2b8f88358c9afaea51ee871e6f10f7de64ff70419f9b7e24050d9e9ee20e1eb1",
-      "server_sha256": "0edd705097b170e880636544d273e30579de3547ec98dc6d0b8f8d2745ba9046"
-    },
-    "mklink/remote/acquisition.py": {
-      "base_sha256": "69e23bcd690fd737f4c3fbfafb18f8cb5030e909509789e39aa5e4630b715141",
-      "server_sha256": "9ef734e4440090cca594b3c4c86486978b039d5f1d2f379bf95d083c95348949"
-    },
-    "mklink/remote/api.py": {
-      "base_sha256": "1b754d375f8c5fe7be264d8c28ab879a7d9b0229b570cf7ce3989870521b55f0",
-      "server_sha256": "1194b7fe9a92f7722929aaa02537bfa55fc64aa6cb2ac47314a0ab654aa17447"
-    },
-    "mklink/runtime.py": {
-      "base_sha256": "b9e8ef2f928d37cf78e56570bcfd80e214f97a455a99ee018a248d88835e89b5",
-      "server_sha256": "34c58eba8c668a4d3fc8fee1a643dfb8e4eb8d5373173a4ffbb1c4bbcad0ec17"
-    },
-    "mklink/runtime_api.py": {
-      "base_sha256": "f9c41b56a27267cd31dca27f4d20fe27c7e6b45ecc135ad7eb0e9b6120d5f09c",
-      "server_sha256": "c689b45588149367ede70c0a6fb28c199b4aebb83e100dfa9393b2ca6057bf0f"
-    },
-    "mklink/runtime_probe.py": {
-      "base_sha256": "9f5c721ae7eb0dcfd3b16fddddab3333308879734435c5e8e0d56bfe43ba0eb9",
-      "server_sha256": "05a63a3165b8c3a2d03fa948edd4a6450f02d7e07813f35c51c8dfdad0cae606"
-    },
-    "mklink/runtime_recovery.py": {
-      "base_sha256": "016ae394d2ad211cef9fbaaf87d4755820939aaba56ba52405ec94a9a2494a5c",
-      "server_sha256": "f497aa8b0f06235bc9ec164b2187d9e515487924fe3c890c0925710a903c4208"
+      "base_sha256": "efeb849978b236035ea89c9100a921341ce3c86ffb092972cef6ae336c1af0db",
+      "server_sha256": "5ae2eb6b4b2cb8ae9614c9c70bc5e4eeaa18566849f16c7d4a56ea0f2075be1c"
     },
     "mklink/remote/shared_target.py": {
       "base_sha256": "fff4253de8fd2e2227e19745eb0b60705491a9f4391ab1cb56363b50b2cfefdb",
       "server_sha256": "092c3210f15f9c3729e7871c2e2bf37a28ebb9a819e1119735c85c7ee91111c1"
     },
-    "mklink/dump_benchmark.py": {
-      "base_sha256": "0a092bf1a7c9834fae26625df80894a621e47eb9a6caf5259e95df5856df7e99",
-      "server_sha256": "4655d49d92e8d587031b479d619e3f30f97b5e5b19e7f15de63e0685a1e1c02e"
+    "mklink/runtime.py": {
+      "base_sha256": "350da39314012cf6ed98fce52257771788a7e35cb9eab0ff4aa2f738c53742af",
+      "server_sha256": "c6ce5f95b63158db07c1a373100383ebb57fc5863e5a601a8cebe689f66cf106"
     },
-    "mklink/dump_memory.py": {
-      "base_sha256": "de51cbc0e124adb195e2effc579a260fd88dd90742fe38990099783c4e772475",
-      "server_sha256": "bafae931cbd448688b2821152e5b2852903f120b23336d10b633a9cc179dd7b4"
+    "mklink/runtime_binding.py": {
+      "base_sha256": "9a02597dd105307b4f7f6587efe1f8a20d49ae5e4166fac6c954131b48a32ca6",
+      "server_sha256": "1295528d321e55ba9fc6b5c41c344cb8dae9f7ea36140e920efa10841d7783b1"
     },
-    "mklink/mux_watch.py": {
-      "base_sha256": "11b81faa272dd7c57e2eb0a96b6d64d4c206cc7726db7a964df531179d768258",
-      "server_sha256": "beffeb5a64bd6974067d506f92bb44a50e46567778d7e3669518fe9e0c9c1855"
+    "mklink/transport_factory.py": {
+      "base_sha256": "d6445b4481b8f8eeb0ceed366a43544bff15e66ddf220465055a1b49db3793f9",
+      "server_sha256": "690db262c05750fac0d87159929e139e9e3734552d43d44af3cb1aa9aab66856"
+    },
+    "mklink/mux.py": {
+      "base_sha256": "5371ece8a57bb375a8fa0cd3baabd1a277c0c9253a9db9eb4eea21f318709270",
+      "server_sha256": "715e10f51433b70d4157ba3e95c97359faa51bcae411f58bce1b7185f2e0eb85"
     }
   }
 }

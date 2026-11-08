@@ -6,6 +6,9 @@ def main():
     p=argparse.ArgumentParser();p.add_argument('--staged',required=True,type=Path);p.add_argument('--assets',required=True,type=Path);p.add_argument('--output',required=True,type=Path);p.add_argument('--stage-only',action='store_true');args=p.parse_args()
     source=args.staged.resolve();assets=args.assets.resolve();out=args.output.resolve();out.mkdir(parents=True,exist_ok=True)
     provenance=json.loads((source/'remote-provenance.json').read_text())
+    pin=json.loads((Path(__file__).resolve().parents[1]/'adapter/upstream.json').read_text())
+    if provenance.get('upstream_commit')!=pin['upstream_commit'] or provenance.get('files')!=pin['files']:
+        raise RuntimeError('Stage the currently pinned private backend before building the server')
     import hashlib
     for name,item in provenance['files'].items():
         if hashlib.sha256((source/name).read_bytes()).hexdigest()!=item['server_sha256']:raise RuntimeError('Staged server changed: '+name)
