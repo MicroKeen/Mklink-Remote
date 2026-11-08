@@ -37,6 +37,8 @@ class DownloadTests(unittest.TestCase):
             partial=Path(directory)/'sdk.partial';partial.write_bytes(b'incomplete download')
             prepare.download_sdk(partial)
             self.assertEqual(partial.read_bytes(),b'verified input');self.assertEqual(request.call_count,2);sleep.assert_called_once_with(1)
+            self.assertEqual(request.call_args.args[0].get_header('Accept'),'application/octet-stream')
+            self.assertEqual(request.call_args.args[0].full_url,prepare.SDK_URL)
     def test_transient_failure_has_bounded_retries(self):
         with patch.object(prepare.urllib.request,'urlopen',side_effect=TimeoutError()) as request, patch.object(prepare.time,'sleep') as sleep:
             with self.assertRaises(TimeoutError):prepare.download_sdk(Path('unused.partial'))

@@ -6,11 +6,12 @@ import argparse,hashlib,json,shutil,subprocess,time,urllib.error,urllib.request,
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
 SDK_SHA='555710fff446f80776b3fab418343d1370b6a083faa38f7d568896ac63c3d300'
-SDK_URL='https://github.com/MicroKeen/Mklink-AI-Probe/releases/download/v0.4.0/Mklink-AI-Probe-v0.4.0-Skill.zip'
+SDK_URL='https://api.github.com/repos/MicroKeen/Mklink-AI-Probe/releases/assets/675175418'
 def download_sdk(partial):
+    request=urllib.request.Request(SDK_URL,headers={'Accept':'application/octet-stream','User-Agent':'Mklink-Remote-build'})
     for attempt in range(4):
         try:
-            with urllib.request.urlopen(SDK_URL,timeout=90) as response,partial.open('wb') as out:
+            with urllib.request.urlopen(request,timeout=90) as response,partial.open('wb') as out:
                 shutil.copyfileobj(response,out)
             return
         except (urllib.error.URLError,TimeoutError) as error:
