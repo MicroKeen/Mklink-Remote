@@ -2,7 +2,16 @@
 name = "mklink-wireless-config"
 version = "0.8.1"
 edition = "2021"
+autobins = false
 default-run = "mklink-wireless-config"
+
+[[bin]]
+name = "mklink-wireless-config"
+path = "src/main.rs"
+
+[[bin]]
+name = "mklink-remote"
+path = "src/bin/mklink-remote.rs"
 
 [lib]
 name = "mklink_remote_core"

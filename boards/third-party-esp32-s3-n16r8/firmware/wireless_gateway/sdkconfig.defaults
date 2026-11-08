@@ -39,3 +39,6 @@ CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
 
 # Keep one HTTP pull in flight without repeated delayed-ACK stalls. lwIP buffers use PSRAM.
 CONFIG_LWIP_TCP_SND_BUF_DEFAULT=32768
+
+# PSRAM BLE replies must not require transient internal DMA buffers.
+CONFIG_MBEDTLS_HARDWARE_AES=n

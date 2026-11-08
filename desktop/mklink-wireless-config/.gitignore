@@ -7,3 +7,5 @@
 /.target-venv/
 
 /.android-env.local.json
+
+/src-tauri/resources/licenses/

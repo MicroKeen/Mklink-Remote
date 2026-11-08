@@ -7,7 +7,7 @@ use std::path::Path;
 const MAX:usize=1024*1024;
 const RESPONSE_MAX:usize=16*1024*1024;
 const METHODS:&[(&str,&str)]=&[
-    ("preferences_get","{}"),("preferences_set",r#"{"theme":"dark|light","skin":"technical|aurora|sand","page":"overview|shared|network|gateway|logs|update|install|help"}"#),
+    ("preferences_get","{}"),("preferences_set",r#"{"theme":"dark|light","skin":"technical|aurora|sand","page":"overview|shared|network|gateway|logs|update|install|help|target"}"#),
     ("service_stop","{}"),("service_status","{}"),
     ("list_ports","{}"),("list_ble","{}"),
     ("connect_serial",r#"{"port":"COM…"}"#),

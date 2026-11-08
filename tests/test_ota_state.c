@@ -7,6 +7,7 @@ esp_partition_t mock_ota={.address=0x420000,.size=0x400000,.type=0,.subtype=16,.
 esp_partition_t mock_current;
 esp_ota_img_states_t mock_boot_state;
 bool mock_corrupt_readback;
+size_t mock_internal_limit=1024;
 static const char *owner="11111111111111111111111111111111",*other="22222222222222222222222222222222",*job="33333333333333333333333333333333";
 static char digest[65];
 static void image(bool compatible){
@@ -49,5 +50,8 @@ int main(void){
     confirm_running_image();assert(mock_confirm_calls==1&&update.state==CONFIRMED);
     reset();image(true);assert(begin(digest));assert(chunk(0,owner));assert(call("firmware.finish",params(),owner));
     mock_corrupt_readback=true;write_staged_image();assert(update.state==FAILED&&!mock_boot_calls);
+    reset();image(true);assert(begin(digest));assert(chunk(0,owner));assert(call("firmware.finish",params(),owner));
+    mock_internal_limit=1023;write_staged_image();
+    assert(update.state==FAILED&&!mock_begin_calls&&!mock_write_calls&&!mock_boot_calls&&!update.buffer);
     puts("PASS OTA ownership/order/hash/protocol/async-write/readback/activation/confirmation guards; crypto/platform mocked");
 }

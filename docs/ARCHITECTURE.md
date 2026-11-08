@@ -49,6 +49,14 @@ BLE worker stack. Fixed notification pacing is retained. Removing it caused a
 real receiver fragment mismatch and was rejected. TCP's send buffer is 32 KiB;
 these lwIP buffers are allocated through the existing PSRAM configuration.
 
+The S3 build uses software AES-GCM for BLE authentication/encryption. Hardware
+AES can require internal DMA scratch space for unaligned PSRAM reply buffers;
+large management responses failed under internal-heap pressure in qualification.
+PSRAM capacity does not remove that internal-memory constraint. OTA reserves a
+1 KiB internal readback buffer before beginning flash erase, then verifies the
+complete APP in chunks. Allocation failure therefore leaves flash untouched;
+SHA-256 and inactive-slot activation checks remain mandatory.
+
 Remote sampling tracks elapsed delivery time against probe sample timestamps. If
 a wireless stream remains over two seconds behind for two seconds, or exceeds
 four seconds of lag, it reports explicit

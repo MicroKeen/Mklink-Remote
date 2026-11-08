@@ -26,7 +26,8 @@ static inline void vTaskDelay(unsigned t){(void)t;}
 #define MALLOC_CAP_INTERNAL 1
 #define MALLOC_CAP_8BIT 2
 #define MALLOC_CAP_SPIRAM 4
-static inline void *heap_caps_malloc(size_t n,unsigned c){(void)c;return malloc(n);}
+extern size_t mock_internal_limit;
+static inline void *heap_caps_malloc(size_t n,unsigned c){return (c&MALLOC_CAP_INTERNAL)&&n>mock_internal_limit?NULL:malloc(n);}
 typedef struct {uint32_t magic_word;char project_name[32],version[32];} esp_app_desc_t;
 typedef struct {uint8_t magic;uint16_t chip_id;} esp_image_header_t;
 typedef struct {uint32_t address,size;} esp_image_segment_header_t;

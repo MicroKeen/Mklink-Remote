@@ -1,5 +1,9 @@
 # Testing
 
+## 0.8.1 installed-package regression
+
+See [the 2026-11-08 installer report](VALIDATION-0.8.1.md) for AP/STA/BLE at both SWD clocks, queue and integrity counters, explicit STOP, post-stop RAM, OTA recovery and remaining limits. It supersedes historical performance claims only for those exact profiles.
+
 ## Offline source checks
 
 Follow [BUILD](BUILD.md) to prepare an isolated Python environment and verified SDK. `tools/verify-source.py` runs the public-file audit, frontend tests/build, Python installer/transport/target boundary tests and Rust tests. It never connects hardware. Rust source tests explicitly omit distribution resources; they do not produce a qualified installer.

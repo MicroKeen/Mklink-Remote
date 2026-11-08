@@ -1,5 +1,6 @@
 """Create the board-specific offline firmware bundle from a successful IDF build."""
 from pathlib import Path
+import argparse
 import hashlib
 import json
 import shutil
@@ -7,7 +8,9 @@ import zipfile
 
 root = Path(__file__).resolve().parents[3]
 app = root / "desktop/mklink-wireless-config"
-build = root / "boards/third-party-esp32-s3-n16r8/firmware/wireless_gateway/build"
+parser = argparse.ArgumentParser()
+parser.add_argument("--build-dir", type=Path, default=root / "boards/third-party-esp32-s3-n16r8/firmware/wireless_gateway/build")
+build = parser.parse_args().build_dir.resolve()
 version = json.loads((build / "project_description.json").read_text(encoding="utf-8"))["project_version"]
 dest = app / "src-tauri/resources/firmware"
 dest.mkdir(parents=True, exist_ok=True)

@@ -459,12 +459,12 @@ fn resource(app: &tauri::AppHandle, path: &str) -> Result<PathBuf, String> {
     if bundled.exists() {
         return Ok(bundled);
     }
-    let dev = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(path);
-    if dev.exists() {
-        Ok(dev)
-    } else {
-        Err("内置工具或默认固件缺失，请使用完整安装包".into())
+    #[cfg(debug_assertions)]
+    {
+        let dev = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(path);
+        if dev.exists() { return Ok(dev); }
     }
+    Err("内置工具或默认固件缺失，请使用完整安装包".into())
 }
 fn copy_firmware_bundle(source:&std::path::Path,dest:&std::path::Path)->Result<(),String>{
     let manifest:Value=serde_json::from_slice(&std::fs::read(source.join("manifest.json")).map_err(|e|e.to_string())?).map_err(|e|e.to_string())?;

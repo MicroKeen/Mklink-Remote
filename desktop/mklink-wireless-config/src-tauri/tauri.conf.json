@@ -36,7 +36,9 @@
       "resources/device-tool/mklink-target-tool.exe": "resources/device-tool/mklink-target-tool.exe",
       "resources/device-tool/MKLINK-LICENSE.txt": "resources/device-tool/MKLINK-LICENSE.txt",
       "resources/device-tool/PYSERIAL-NOTICE.txt": "resources/device-tool/PYSERIAL-NOTICE.txt",
-      "resources/cli/mklink-remote.exe": "mklink-remote.exe"
+      "resources/cli/mklink-remote.exe": "mklink-remote.exe",
+      "resources/licenses/": "resources/licenses/",
+      "../docs/AGENT-CLI.md": "docs/AGENT-CLI.md"
     },
     "windows": {
       "nsis": {

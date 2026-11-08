@@ -61,6 +61,13 @@ python desktop/mklink-wireless-config/tools/prepare-firmware.py
 
 Alternatively use the board's `build.ps1 -IdfPath <your-esp-idf-directory>`; existing IDF_TOOLS_PATH and IDF_PYTHON_ENV_PATH remain installation-specific. No command above flashes a device. Firmware defaults select ESP32-S3, N16R8 and its board pin configuration. C6 source is a separate test fixture.
 
+## Release algorithm assets
+
+Before distributing binaries, run `python desktop/mklink-wireless-config/tools/prepare-release-assets.py --sdk .deps/sdk-0.4.0 --destination .deps/release-assets`.
+Use `.deps/release-assets` as `-SdkRoot` for the target helper and `.deps/release-assets/mklink` as `--assets` for the private server. It verifies Pack/archive/license hashes and retains only FLM bytes matched to bundled Apache-2.0/BSD-3-Clause packs. The current input yields 167 FLM blobs, 414 target entries and 73 packs; this is not the full upstream algorithm catalogue. Keep the pack licenses and redistribution summary with the release.
+
+The installer includes `resources/licenses/`, including Python, Rust, frontend and font notices, the corresponding esptool/installer-helper sources, and the unmodified MPL selectors crate. Populate it from the exact build dependencies before bundling. Release builds use installed resources only; a missing resource must not fall back to this development checkout. Cargo explicitly bundles only the GUI and CLI, even if private diagnostics exist under `src/bin/`.
+
 ## Prepare native resources and a Windows bundle
 
 These are maintainer build steps; review third-party binary distribution terms before publishing the outputs.
@@ -68,7 +75,7 @@ These are maintainer build steps; review third-party binary distribution terms b
 ```powershell
 $app = Resolve-Path desktop/mklink-wireless-config
 $python = (Resolve-Path .venv/Scripts/python.exe).Path
-$sdk = (Resolve-Path .deps/sdk-0.4.0).Path
+$sdk = (Resolve-Path .deps/release-assets).Path
 $runtime = (Resolve-Path .deps/remote-staged).Path
 & "$app/tools/build-device-tool.ps1" -Python $python
 & "$app/tools/build-target-tool.ps1" -SdkRoot $sdk -RuntimeRoot $runtime -Python $python
@@ -86,6 +93,10 @@ without hardware, run `tests/run_staged_mux_slot.py`, `tests/run_staged_mux_tail
 `PYTHONPATH` set to the absolute path of `.deps/remote-staged`.
 
 Use a fresh staging directory if it already exists; the script intentionally refuses to overwrite an existing stage. Both `builtin_flm/manifest.json` and `builtin_packs/manifest.json` must exist in the supplied SDK assets.
+
+Run the following bundle commands in a fresh public clone/export. Tauri can discover private `src/bin` diagnostics even when Cargo has `autobins=false`; do not bundle an experiment working tree. Verify the installed root contains only the GUI, CLI and uninstaller.
+
+Map local build paths out of Rust diagnostics before compiling a public binary. For example, set `CARGO_ENCODED_RUSTFLAGS` to `--remap-path-prefix=<user-home>=/build-home` and `--remap-path-prefix=<checkout>=/source`, separated by character 31; use both Windows and slash-normalized checkout spellings. Keep these flags for the complete release build and scan the installed files for private markers.
 
 Prepare the CLI resource before the full Tauri bundle:
 

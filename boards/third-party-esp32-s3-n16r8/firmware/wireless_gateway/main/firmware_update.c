@@ -23,6 +23,7 @@
 
 #define IMAGE_LIMIT (4U*1024U*1024U)
 #define CHUNK_LIMIT 2048U
+#define VERIFY_CHUNK 1024U
 #define CONFIRM_TIMEOUT_MS 120000U
 #define OTA_PROTOCOL_MARKER "MKLINK_NODE_OTA_V1"
 /* Retained in the image; older APPs cannot satisfy the confirmation protocol. */
@@ -117,7 +118,9 @@ static void write_staged_image(void){
     /* State WRITING prevents mutation/free by RPC or timeout. No guard held
      * across flash work so Wi-Fi/BLE status/lease renewal stays responsive. */
     esp_ota_handle_t handle=0;
-    esp_err_t err=esp_ota_begin(update.slot,update.saved.bytes,&handle);
+    /* Reserve bounded readback memory before any erase, even on a fragmented heap. */
+    uint8_t *scratch=heap_caps_malloc(VERIFY_CHUNK,MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT);
+    esp_err_t err=scratch?esp_ota_begin(update.slot,update.saved.bytes,&handle):ESP_ERR_NO_MEM;
     if(err==ESP_OK){
         for(size_t offset=0;offset<update.saved.bytes&&err==ESP_OK;){
             size_t n=update.saved.bytes-offset;if(n>16384)n=16384;
@@ -129,12 +132,10 @@ static void write_staged_image(void){
     }
     if(handle)esp_ota_abort(handle);
     /* Exact file bytes, including ESP image trailer, must match source SHA. */
-    uint8_t *scratch=heap_caps_malloc(8192,MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT);
     mbedtls_sha256_context hash;mbedtls_sha256_init(&hash);uint8_t digest[32];char hex[65]={0};
-    if(err==ESP_OK&&!scratch)err=ESP_ERR_NO_MEM;
     if(err==ESP_OK&&mbedtls_sha256_starts(&hash,0))err=ESP_FAIL;
     for(size_t offset=0;offset<update.saved.bytes&&err==ESP_OK;){
-        size_t n=update.saved.bytes-offset;if(n>8192)n=8192;
+        size_t n=update.saved.bytes-offset;if(n>VERIFY_CHUNK)n=VERIFY_CHUNK;
         err=esp_partition_read(update.slot,offset,scratch,n);
         if(err==ESP_OK&&mbedtls_sha256_update(&hash,scratch,n))err=ESP_FAIL;
         offset+=n;vTaskDelay(1);

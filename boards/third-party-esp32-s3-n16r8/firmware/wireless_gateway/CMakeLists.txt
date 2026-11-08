@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
 if(NOT DEFINED PROJECT_VER)
-    set(PROJECT_VER "0.7.2")
+    set(PROJECT_VER "0.7.3")
 endif()
 set(COMPONENTS main)
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)

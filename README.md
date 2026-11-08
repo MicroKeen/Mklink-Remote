@@ -18,12 +18,12 @@
 - JSON CLI 与 Agent 操作帮助；Info/Warning/Error 日志筛选、搜索、复制和导出。
 - 原技能和 MCP 保持不变，工作台与技能分别持有客户端身份，共享硬件状态和采集缓存。
 
-已验证组合：非官方 ESP32-S3 N16R8、S3 固件 0.7.2、V4 4.7.2、STM32F411、桌面 0.8.0。详见[验收与性能口径](docs/VALIDATION-0.8.0.md)。其他板卡/MCU 不自动继承该结果；Android 仍是环境准备阶段，公网中心目标调试需另行验证。
+0.8.1 预览安装包已用安装目录 CLI 验证：非官方 ESP32-S3 N16R8、S3 0.7.3、V4.7.3、STM32F411，AP/STA/BLE 各测 10/30 MHz，停止后可读 RAM。支持档位与失败点见[本轮验收报告](docs/VALIDATION-0.8.1.md)；800 Hz 多通道和 Wi-Fi 4 KiB 长采集未通过本轮资格。历史完整功能验收见[0.8.0 报告](docs/VALIDATION-0.8.0.md)。其他板卡/MCU 不自动继承该结果；Android 仍是环境准备阶段，公网中心目标调试需另行验证。
 
 ## 开始使用
 
 1. 核对[接线和供电](docs/HARDWARE.md)：USB1 是 USB-UART 维护口，USB2 是原生 USB-OTG Host。
-2. 如有已发布的资格验证包，从 [Releases](https://github.com/MicroKeen/Mklink-Remote/releases) 下载；也可按[构建指南](docs/BUILD.md)编译。源码公开不表示安装包已发布。
+2. 从 [0.8.1 预览版 Releases](https://github.com/MicroKeen/Mklink-Remote/releases/tag/v0.8.1) 下载安装包或便携包，核对 SHA256SUMS 与验收范围；安装包尚未签名。也可按[构建指南](docs/BUILD.md)编译。
 3. USB1 配对并保存设备凭据，配置无线连接，进入「共享目标调试」。
 4. 原版 MCP 连接 Remote 注册的站点；新增站点或端口改变后，重新加载已启动的 MCP。
 5. Agent 使用同目录的 `mklink-remote.exe help` 查看 JSON 命令；操作细节见 [CLI 帮助](desktop/mklink-wireless-config/docs/AGENT-CLI.md)。

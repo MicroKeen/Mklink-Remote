@@ -16,14 +16,14 @@ Original MKLink MCP ────┘
 - USB maintenance; AP, STA and AP+STA configuration; encrypted BLE; Wi-Fi/BLE S3 OTA.
 - Shared target memory access, guarded APP programming, RTT, SuperWatch and RTOS Trace.
 - JSON CLI for workbench operations and Agent integration; Info/Warning/Error log filtering, copying and export.
-- Validated combination: third-party ESP32-S3 N16R8, S3 firmware 0.7.2, V4 4.7.2, STM32F411, desktop 0.8.0. See [qualification and limits](docs/VALIDATION-0.8.0.md).
+- Preview 0.8.1: installed-CLI AP/STA/BLE regression at 10/30 MHz with S3 0.7.3, V4.7.3 and STM32F411. See [tested profiles and failures](docs/VALIDATION-0.8.1.md). Eight-channel 800 Hz and sustained Wi-Fi 4 KiB capture are not qualified. The broader 0.8.0 functional qualification remains [historical evidence](docs/VALIDATION-0.8.0.md).
 
 Other MCUs, boards and V4 revisions are not qualified by that result. Android is environment preparation, not a completed mobile product. Center registration exists; public remote target debugging requires separate validation.
 
 ## Start here
 
 1. Check [wiring and board requirements](docs/HARDWARE.md). USB1 is the USB-UART maintenance port; USB2 is the native USB OTG host port.
-2. Use a qualified package from [Releases](https://github.com/MicroKeen/Mklink-Remote/releases) when available, or follow [source build instructions](docs/BUILD.md). This source publication does not imply an installer has been released.
+2. Download the unsigned installer or portable package from [0.8.1 preview](https://github.com/MicroKeen/Mklink-Remote/releases/tag/v0.8.1), compare SHA256SUMS and read its qualification limits. Or follow [source build instructions](docs/BUILD.md).
 3. Pair over USB1, configure a wireless connection, then open **共享目标调试** in the workbench.
 4. Connect the original MKLink MCP to the site registered by Remote. Reload an already-running MCP after site creation or endpoint changes.
 5. An Agent uses the bundled `mklink-remote.exe`; run `help` to list JSON operations. CLI and GUI share the same local service; MCP has a separate client identity on the shared backend.

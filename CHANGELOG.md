@@ -1,12 +1,14 @@
 # Changelog
 
-## 0.8.1 — desktop candidate
+## 0.8.1 — Windows preview (2026-11-08)
 
 - Rebuild the private backend and target helper from the tested 0.4.3 pin, including Remote heartbeat, STOP-tail and backpressure fixes. No experimental dual-core/64 KiB changes are included.
 - Reduce the main navigation to overview, shared debugging, logs and help; retain setup and maintenance under an expandable group, with overview diagnostics collapsed.
 - Update in-app Agent guidance and machine-readable CLI capabilities with the backend binding, task completion rules and sampling limitations.
 - Keep STOP requests visibly pending until the target job ends; distinguish parser frame loss from sample loss and handle immediate cancellation without dividing by zero.
-- This is a local desktop candidate. Browser/offline checks do not constitute three-route hardware qualification or a public release.
+- Actual installed-CLI AP/STA/BLE 10/30 MHz qualification, explicit STOP/RAM verification and STA APP OTA; see [profiles and retained failures](docs/VALIDATION-0.8.1.md). High-load results do not imply unlimited wireless throughput.
+- S3 0.7.3 uses software AES-GCM to avoid internal DMA scratch pressure on large BLE replies; OTA reserves 1 KiB readback memory before erase. Initial low-memory failures and USB APP-only recovery are documented.
+- Package only the GUI/CLI and verified resources, map private Rust build paths, retain third-party notices and filter algorithm assets to licensed byte matches. Release gates bind both firmware and installer hashes. C6 is retained as a user-authorized test fixture.
 
 
 ## Unreleased
@@ -30,4 +32,4 @@
 - STA/AP/BLE qualification with STM32F411, including complete readback, RTT, SuperWatch and RTOS Trace; original target/C6 firmware restored.
 - Public source manifest, local publishing skill, dependency preparation, portable build inputs and offline CI.
 
-The desktop version is 0.8.0. Bundled/qualified S3 firmware is 0.7.2; these version numbers are independent. Source publication is not a new hardware qualification or a claim that an installer is available.
+The historical 0.8.0 source publication used S3 0.7.2. Desktop and S3 versions are independent; later preview qualification is described above.
