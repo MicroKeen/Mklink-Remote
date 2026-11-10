@@ -61,6 +61,8 @@ python desktop/mklink-wireless-config/tools/prepare-firmware.py
 
 Alternatively use the board's `build.ps1 -IdfPath <your-esp-idf-directory>`; existing IDF_TOOLS_PATH and IDF_PYTHON_ENV_PATH remain installation-specific. No command above flashes a device. Firmware defaults select ESP32-S3, N16R8 and its board pin configuration. C6 source is a separate test fixture.
 
+If reusing an existing S3 `sdkconfig`, select **External SPIRAM** under Bluetooth → NimBLE Options → General → Memory allocation strategy. Existing `sdkconfig` values take precedence over `sdkconfig.defaults`. This moves NimBLE host allocations to PSRAM and leaves internal RAM available for USB DMA.
+
 ## Release algorithm assets
 
 Before distributing binaries, run `python desktop/mklink-wireless-config/tools/prepare-release-assets.py --sdk .deps/sdk-0.4.0 --destination .deps/release-assets`.

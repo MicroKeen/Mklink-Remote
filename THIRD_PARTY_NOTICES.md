@@ -6,7 +6,8 @@ The root MIT license covers this project's original code. It does not replace up
 |---|---|---|
 | MKLink shared backend | [MicroKeen/Mklink-AI-Probe](https://github.com/MicroKeen/Mklink-AI-Probe), commit `3905a68bceaf6d863b9159de2a390e161788af48` | MIT at this exact commit; original copyright retained. Source fetched separately; Remote patch and adapters are maintained here. |
 | MKLink native SDK | Official v0.4.0 Skill ZIP, SHA-256 `555710fff446f80776b3fab418343d1370b6a083faa38f7d568896ac63c3d300` | Downloaded separately and verified. Includes its LICENSE and notices; never modifies an installed skill. |
-| ESP-IDF and managed components | ESP-IDF 5.5.2, versions in component manifests/lockfiles | Apache-2.0 and component-specific licenses. Fetched by ESP-IDF; not vendored here. |
+| ESP-IDF and managed components | ESP-IDF 5.5.2, versions in component manifests/lockfiles | Apache-2.0 and component-specific licenses. Fetched by ESP-IDF, except for the local USB Host MSC component below. |
+| ESP-IDF USB Host MSC | [Espressif USB Host MSC 1.2.0](https://components.espressif.com/components/espressif/usb_host_msc/versions/1.2.0/readme) | Apache-2.0. The firmware vendors a copy with a transfer allocation fix and retains its license and copyright notices. |
 | React, Vite, Radix Select, QRCode | Versions in package-lock.json | MIT; exact dependency metadata supplied by npm. Radix notice is also under public/third-party-notices. |
 | Phosphor icons | @phosphor-icons/react; UI icon SVGs | MIT; notice under public/third-party-notices/phosphor-icons-react.txt. |
 | Inter, IBM Plex Mono, Noto Sans SC | @fontsource packages in package-lock.json | SIL Open Font License; preserve the packages' license text when distributing compiled fonts. |
