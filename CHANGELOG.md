@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.8.2 — Windows (2026-11-10)
+
+- Bundle S3 firmware 0.7.3-msc-fixed for the third-party N16R8 board. NimBLE host allocations move to PSRAM, and MSC handles transfer allocation failure without releasing the old buffer early.
+- Report partial Watch samples after the requested measurement window separately from incomplete samples within the window.
+
 ## 0.8.1 — Windows preview (2026-11-08)
 
 - Rebuild the private backend and target helper from the tested 0.4.3 pin, including Remote heartbeat, STOP-tail and backpressure fixes. No experimental dual-core/64 KiB changes are included.

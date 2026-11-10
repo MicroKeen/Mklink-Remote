@@ -79,6 +79,42 @@ class TailTests(unittest.TestCase):
         self.assertEqual(result['sample_hz'], 10)
         session.stop.assert_called_once()
 
+    def test_partial_watch_sample_is_counted_only_inside_measurement_window(self):
+        import struct
+        from mklink.mux import MuxTransport, packet
+
+        regions = [(0x20000000 + 4 * part, 4) for part in range(3)]
+        for anchor, age, outside in ((0, 499000, False), (0, 500000, True),
+                                     ((1 << 32) - 400000, 510000, True)):
+            with self.subTest(anchor=anchor, age=age):
+                mux = MuxTransport(lambda wire: len(wire))
+                watch = MuxWatchSession(mux, regions, .1)
+                watch._timestamp(anchor + 300000)
+                session = MagicMock()
+                session.read_frames.return_value = [
+                    PackedWatchSample(anchor + t, b'', 0) for t in (0, 200000, 300000)
+                ]
+
+                def stop(*, on_watch_tail):
+                    for index in range(2):
+                        stamp = (anchor + age + index * 2000) & 0xffffffff
+                        payload = struct.pack('<BBI', index, 0, stamp) + bytes(4)
+                        mux.feed(packet(0x41, mux.epoch, index + 1, payload))
+                    on_watch_tail(watch.read_frames(packed=True))
+                    session.stats = {'incomplete_samples': int(bool(watch._pending))}
+                    session.incomplete_sample_timestamp_us = getattr(watch, 'incomplete_sample_timestamp_us', None)
+
+                session.stop.side_effect = stop
+                clock = iter((0, 0, 0))
+                with patch('mklink.dump_memory.DumpMemoryStreamSession', return_value=session), \
+                        patch.object(dump_benchmark.time, 'monotonic', side_effect=lambda: next(clock, .51)):
+                    result = dump_benchmark.measure(MagicMock(), regions, duration=.5, period=.1)
+
+                self.assertEqual(result['samples'], 2)
+                self.assertEqual(result['incomplete_tail'], not outside)
+                self.assertEqual(result['integrity']['incomplete_samples'], int(not outside))
+                self.assertEqual(result['integrity'].get('incomplete_samples_after_window', 0), int(outside))
+
     def test_failed_stop_never_claims_queued_data(self):
         watch = MuxWatchSession(MagicMock(), [(0x20000000, 4)], .1)
         watch.transport.request.side_effect = ConnectionError('STOP unconfirmed')

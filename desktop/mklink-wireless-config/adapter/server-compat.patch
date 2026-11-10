@@ -1,6 +1,6 @@
 --- a/mklink/dump_benchmark.py
 +++ b/mklink/dump_benchmark.py
-@@ -67,45 +67,72 @@
+@@ -67,46 +67,78 @@
      max_acquisition_us = dap_intervened_samples = 0
      assembler = DumpSampleAssembler([n for _, n in regions], ordered=True)
      # Keep only interval counts, not millions of raw sample objects.
@@ -102,9 +102,15 @@
 +    # Cancellation must not interrupt the already-submitted STOP cleanup.
 +    check_capture_cancelled(cancelled)
      stats = session.stats
++    if stats.get('incomplete_samples'):
++        partial_us = session.incomplete_sample_timestamp_us
++        if partial_us is not None and first_seen is not None and partial_us - first_seen >= cutoff_us:
++            stats['incomplete_samples_after_window'] = stats['incomplete_samples']
++            stats['incomplete_samples'] = 0
      if any(stats.get(k, 0) for k in ('parser_crc_errors','parser_dropped_frames',
                                     'parser_dropped_bytes','firmware_flagged_frames')):
-@@ -123,6 +150,8 @@
+         raise RuntimeError(f'mem_dump integrity failure: {stats}; max_interval_us={max(intervals, default=0)}')
+@@ -123,6 +155,8 @@
      return {'clock_hz': device._bridge._ctx.swd_clock_hz,
              'duration_s': duration, 'warmup_us': 200000, 'period_s': period,
              'regions': [{'address': hex(a), 'size': n} for a,n in regions],
@@ -125,7 +131,7 @@
 
      def start(self):
          if self.started:
-@@ -975,13 +978,42 @@
+@@ -975,22 +978,56 @@
              raise RuntimeError('dump-memory stream is not started')
          if self._legacy is not None:
              return self._legacy.read_frames(max_bytes)
@@ -171,8 +177,13 @@
 +                self._mux_watch.stop()
          finally:
              self.started = False
++
++    @property
++    def incomplete_sample_timestamp_us(self):
++        return getattr(self._mux_watch, 'incomplete_sample_timestamp_us', None)
 
-@@ -990,7 +1022,8 @@
+     @property
+     def stats(self):
          if self._legacy is not None:
              return self._legacy.stats
          watch = self._mux_watch
@@ -245,7 +256,15 @@
 +                return self.read_frames(packed=packed, max_bytes=None)
 --- a/mklink/mux_watch.py
 +++ b/mklink/mux_watch.py
-@@ -87,10 +87,10 @@
+@@ -59,6 +59,7 @@
+         if self.period > 60000000:
+             raise MuxWatchCapacityError('Multiplex watch period exceeds 60 seconds')
+         self._pending = []
++        self._pending_timestamp = None
+         self._break_before = 0
+         self._reset_generation = None
+         self._last_clock = None
+@@ -87,10 +88,10 @@
                        and len(self.parts) == 1 and self.parts[0][2] in (1, 2)
                        and self.parts[0][1] % self.parts[0][2] == 0)
          command = self.NARROW_BATCH_START if narrow else 0x32
@@ -257,7 +276,7 @@
              answer = self.transport.request(command, body)
              self.transport.watch_running = True
              contract = 'WATCH_NARROW_BATCH' if narrow else 'WATCH_TIMING=2'
-@@ -117,13 +117,17 @@
+@@ -117,13 +118,17 @@
              }
              self._narrow_batch = narrow
 
@@ -277,7 +296,7 @@
              boundary = getattr(event, 'break_before', 0)
              if boundary:
                  self._pending = []
-@@ -153,8 +157,14 @@
+@@ -153,8 +158,14 @@
                  self.gaps += 1
                  self.read_errors += 1
                  self._break_before |= 1
@@ -292,7 +311,16 @@
                  # Firmware retains the subscription. Do not replay commands,
                  # reset the target, lower its clock or publish stale/zero values.
                  continue
-@@ -209,10 +219,15 @@
+@@ -194,6 +205,8 @@
+                 self.gaps += 1
+                 self._break_before |= 1
+                 continue
++            if index == 0:
++                self._pending_timestamp = timestamp
+             self._pending.append(event[6:])
+             if len(self._pending) != len(self.parts):
+                 continue
+@@ -209,12 +222,28 @@
                  and now - self._read_failure_since >= self._read_failure_timeout
                  and not (self._wait_after_sample and self.samples > self._generation_start_samples)
                  and not result):
@@ -310,8 +338,21 @@
 +                'Capture stopped; check the target connection, selected addresses and sampling debug speed.'
              )
          return result
++
++    @property
++    def incomplete_sample_timestamp_us(self):
++        timestamp = self._pending_timestamp
++        if not self._pending or timestamp is None:
++            return None
++        if self._last_clock is not None and timestamp < self._last_clock:
++            if self._last_clock - timestamp < (1 << 31):
++                return None
++            return self._clock_high + (1 << 32) + timestamp
++        return self._clock_high + timestamp
 
-@@ -243,8 +258,15 @@
+     def _frame(self, timestamp, regions):
+         return {'format': 'mux', 'timestamp_us': self._timestamp(timestamp),
+@@ -243,8 +272,15 @@
              future.set_exception(exc)
              raise
 
