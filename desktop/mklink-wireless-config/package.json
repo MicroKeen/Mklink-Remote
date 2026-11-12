@@ -1,6 +1,6 @@
 {
   "name": "mklink-wireless-config",
-  "version": "0.8.2",
+  "version": "0.8.4",
   "private": true,
   "type": "module",
   "scripts": {
@@ -11,7 +11,7 @@
     "test": "vitest run",
     "verify:all": "node scripts/verify.mjs",
     "desktop:build": "tauri build --bundles nsis",
-    "test:ui": "node scripts/public-ui-smoke.cjs"
+    "test:ui": "node scripts/public-ui-smoke.cjs && node scripts/session-recovery-smoke.cjs"
   },
   "dependencies": {
     "@fontsource/ibm-plex-mono": "^5",

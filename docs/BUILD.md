@@ -119,4 +119,11 @@ Pop-Location
 
 The bundle must contain the real firmware manifest/images, installer helper, target helper, private backend, CLI and branding. Never distribute a source-test build with empty resources. Tauri's NSIS bundling can patch the GUI executable; compute qualification hashes after bundling completes.
 
+The NSIS hooks refuse installation or removal while the installed GUI, local
+service or private backend is using its executable. Finish target jobs and stop
+those processes before upgrading. Upgrades replace the recognized private
+backend directory so obsolete frozen dependencies cannot survive; pairing and
+preferences live outside that directory. Verify the installed resource inventory
+after an upgrade, not only an extracted installer.
+
 `tools/package-release.py` additionally requires a genuine HIL qualification file with matching hashes and restoration evidence. Follow [RELEASING](RELEASING.md). Source build success does not recreate or replace that evidence.

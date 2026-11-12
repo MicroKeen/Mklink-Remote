@@ -39,7 +39,7 @@ connect.json 为 `{"port":"实际串口"}`；status.json 为 `{"method":"get_sta
 | 检查／暂存 S3 OTA | inspect_node_firmware / start_node_update；install_job 查询任务 |
 | OTA 状态、认领、激活、确认、放弃 | rpc：firmware.status / claim / activate / confirm / abort；传 job_id、摘要、操作权等原协议字段 |
 | 独立目标识别、读写、准备、烧录、校验、性能与采集 | start_target / target_job / stop_target；help 返回 action 目录 |
-| 共享调试连接、状态、普通能力 | shared_control：attach / status / call / detach |
+| 共享调试连接、状态、普通能力 | shared_control：saved_nodes / attach / status / call / detach |
 | 共享后台烧录任务 | shared_control：job.start / job.status；提交前保存 request_id，显式 confirm=true |
 | 打开现有调试界面 | shared_browser 返回私有本机 URL；GUI 按钮负责打开浏览器 |
 | 文件／工程选择 | CLI 直接传绝对路径；choose_target_path 校验并返回规范路径 |
@@ -52,13 +52,18 @@ service_status 返回当前管理连接和共享客户端状态；CLI 改变连�
 
 1. 用 USB1 配对，或读取先前保存的节点管理密钥。
 2. `shared_control` 的 attach 参数包含 node（node_id、transport、address、token）、project_root 和可选 axf。
+   已注册设备也可传 `node_id`、`project_root` 和可选 `axf`，不再传 `node`；先用 `saved_nodes` 查询已保存的设备、地址和连接方式。该列表不返回密钥，不扫描无线或打开硬件。
 3. Remote 注册一个标准 Site Agent 站点。读取返回的 site 与 instance_id。
 4. 启动原版安装目录的 `python -m mklink.remote.mcp`，使用原版技能的远程流程；remote_sites → remote_connect → remote_capabilities → remote_call。
 5. 如果原版 MCP 在站点注册前已启动，或站点端口已变化，需要重新加载 MCP。支持站点重载的新版客户端可以重载配置，旧客户端需重启；Remote 不修改客户端代码。
 
 默认入口是带独立令牌的本机 WS。WSS 需要另行配置 TLS；S3 HTTP 地址不是技能站点地址。站点注册属于用户配置，不改变技能或 MCP 代码。原版技能运行时与 Remote 私有服务运行时分别维护。
 
+退出本窗口会话会清除本地连接占用。若后台确认丢失，返回 `detached=true`、`backend_detach_confirmed=false` 和 `warning`；这不表示设备释放或烧录完成。重新接入后先检查后台任务状态，不能重复提交未知结果的下载。客户端无响应或协议帧损坏时不重发请求，只退出本窗口的控制进程，保留独立后台与其他客户端。
+
 无线烧录耗时可能超过原版客户端固定超时。因此 Remote 服务端为此类操作立即返回现有后台任务的 job_id、request_id 和 state；这些字段只表示已提交，不能当作烧录成功。继续使用原版 `remote_call` 的 `jobs.status` 查询终态，或用 Remote CLI 的 job.status。断开客户端不取消在途烧录，未知结果不得重放。
+
+如果提交回复丢失、尚未拿到 job_id，接回原后台后调用 `job.status` 并省略 job_id，按提交前保存的 request_id 在返回的 jobs 中查找原任务。查询不会重发烧录；没有找到记录也不能推断没有执行。
 
 ## 停止与采集质量
 

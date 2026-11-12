@@ -25,7 +25,15 @@ class Workbench:
         from mklink_remote.s3_registry import register_node, load_nodes, validate_node
         from mklink.runtime import RuntimeClient, ensure_runtime, request as rpc, browser_url
         from mklink.remote.sites import SiteRegistry, SiteError
-        node = validate_node(request['node'])
+        if 'node' in request and 'node_id' in request:
+            raise ValueError('Select a saved node or supply node credentials, not both')
+        if 'node_id' in request:
+            saved = load_nodes().get('s3-' + str(request['node_id']))
+            if saved is None:
+                raise ValueError('Saved node not found; pair or supply its connection details')
+            node = validate_node(saved)
+        else:
+            node = validate_node(request['node'])
         key = 's3-' + node['node_id']
         project = Path(request['project_root']).resolve(strict=True)
         if not project.is_dir():
@@ -71,6 +79,10 @@ class Workbench:
 
     def dispatch(self, frame):
         method = frame.get('method')
+        if method == 'saved_nodes':
+            from mklink_remote.s3_registry import load_nodes
+            return [{k: node[k] for k in ('node_id', 'transport', 'address')}
+                    for node in load_nodes().values()]
         if method == 'attach':
             if self.client:
                 raise ValueError('Detach this client before attaching another node')
@@ -114,7 +126,7 @@ class Workbench:
                                          confirm=True, arguments=args.get('arguments') or {})
         if method == 'job.status':
             args = frame.get('params') or {}
-            return self.client.job_status(args['job_id'])
+            return self.client.job_status(args.get('job_id'))
         if method == 'detach':
             self.close()
             return {'detached': True}
@@ -122,8 +134,9 @@ class Workbench:
 
     def close(self):
         if self.client:
-            self.client.close()
+            client = self.client
             self.client = None
+            client.close()
 
 
 def main():
@@ -134,7 +147,7 @@ def main():
     sink = sys.stdout
     workbench = Workbench()
     try:
-        for line in sys.stdin:
+        for line in sys.stdin.buffer:
             if len(line) > 65536:
                 raise ValueError('Oversized workbench control frame')
             frame = json.loads(line)
@@ -144,7 +157,7 @@ def main():
                 result = dict(id=frame.get('id'), ok=True, data=data)
             except Exception as error:
                 result = dict(id=frame.get('id'), ok=False, error=str(error))
-            sink.write(json.dumps(result, ensure_ascii=False) + '\n')
+            sink.write(json.dumps(result, ensure_ascii=True) + '\n')
             sink.flush()
     finally:
         workbench.close()

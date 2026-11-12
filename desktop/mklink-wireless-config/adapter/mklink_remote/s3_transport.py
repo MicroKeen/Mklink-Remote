@@ -67,6 +67,7 @@ class WirelessLink:
         self.node_id = node_id
         self.owner = owner
         self.lock = _FifoRLock()
+        self.upload_lock = threading.Lock()
         self.lease = ''
         self.generation = None
         self.sequence = None
@@ -105,6 +106,20 @@ class WirelessLink:
             status = self.rpc('get_status', {})
             if status['device']['id'] != self.node_id:
                 raise RuntimeError('Selected S3/V4 identity is not ready')
+            if status.get('control', {}).get('owner'):
+                state = self.rpc('get_probe_transport', {})
+                if (recover_stream and state.get('state') == 'outcome_unknown' and
+                        state.get('mux_recovery_supported') is True and state.get('mux_recoverable') is True):
+                    # Quarantine retains the old 15-second lease; observe expiry before one new acquire.
+                    deadline = time.monotonic() + 16
+                    while (status['control']['owner'] and not status['control'].get('busy') and
+                           time.monotonic() < deadline):
+                        time.sleep(.25)
+                        status = self.rpc('get_status', {})
+                        if status['device']['id'] != self.node_id:
+                            raise RuntimeError('S3 identity changed while waiting for lease expiry')
+                if status['control']['owner']:
+                    raise RuntimeError('S3 control is still held; wait for the previous session to release before reconnecting')
             if not status['probe']['ready']:
                 if not recover_stream:
                     raise RuntimeError('Wireless recovery disabled for this connection')
@@ -303,29 +318,47 @@ class WirelessLink:
         if not 1<=len(data)<=1048576 or (expected_sha256 is not None and digest!=expected_sha256):
             raise RuntimeError('Staging input changed from the acknowledged image; no file request sent')
         if progress:progress('upload',0,len(data))
-        result = self.call('probe.files.begin', dict(kind=kind, size=len(data), sha256=digest))
-        if result['complete']:
-            if result['sha256'] != digest:
-                raise RuntimeError('Cached file digest mismatch')
-            if progress:progress('complete',len(data),len(data))
-            return result['path']
-        ident = result['upload_id']
-        # Every file chunk has a unique increasing offset. A timeout is never
-        # replayed; programming cannot begin before SHA256-verified commit.
-        for offset in range(0, len(data), self.file_chunk):
-            chunk = data[offset:offset + self.file_chunk]
-            result = self.call('probe.files.write', dict(upload_id=ident, offset=offset,
-                               data_base64=base64.b64encode(chunk).decode('ascii')))
-            if result['offset'] != offset + len(chunk):
-                raise RuntimeError('File offset mismatch; upload not repeated')
-            self.staged_file_bytes+=len(chunk)
-            if progress:progress('upload',result['offset'],len(data))
-        if progress:progress('verify',0,0)
-        result = self.call('probe.files.commit', dict(upload_id=ident))
-        if result['sha256'] != digest or result['bytes'] != len(data):
-            raise RuntimeError('Committed file identity mismatch')
-        if progress:progress('complete',len(data),len(data))
-        return result['path']
+        # Serialize staging without blocking the native reader or lease renewal.
+        with self.upload_lock:
+            if self.call('probe.files.status')['upload_active']:
+                raise RuntimeError('An earlier upload is still active; detach all clients before recovery')
+            ident = None
+            try:
+                result = self.call('probe.files.begin', dict(kind=kind, size=len(data), sha256=digest))
+                if result['complete']:
+                    if result['sha256'] != digest:
+                        raise RuntimeError('Cached file digest mismatch')
+                    if progress:progress('complete',len(data),len(data))
+                    return result['path']
+                ident = result['upload_id']
+                # Each offset is sent once; only a verified commit permits programming.
+                for offset in range(0, len(data), self.file_chunk):
+                    chunk = data[offset:offset + self.file_chunk]
+                    result = self.call('probe.files.write', dict(upload_id=ident, offset=offset,
+                                       data_base64=base64.b64encode(chunk).decode('ascii')))
+                    if result['offset'] != offset + len(chunk):
+                        raise RuntimeError('File offset mismatch; upload not repeated')
+                    self.staged_file_bytes+=len(chunk)
+                    if progress:progress('upload',result['offset'],len(data))
+                if progress:progress('verify',0,0)
+                result = self.call('probe.files.commit', dict(upload_id=ident))
+                if result['sha256'] != digest or result['bytes'] != len(data):
+                    raise RuntimeError('Committed file identity mismatch')
+                if progress:progress('complete',len(data),len(data))
+                return result['path']
+            except Exception as error:
+                try:
+                    state = self.call('probe.files.status')
+                    if state['upload_active']:
+                        owned = state['upload_id']
+                        if not owned or (ident is not None and owned != ident):
+                            raise RuntimeError('Upload identity changed')
+                        # Abort only this lease's temporary staging, never a committed file or target write.
+                        if self.call('probe.files.abort', {'upload_id': owned}).get('aborted') is not True:
+                            raise RuntimeError('Upload abort not confirmed')
+                except Exception as cleanup:
+                    raise RuntimeError(f'{error}; upload cleanup unconfirmed: {cleanup}; detach all clients before recovery; no replay') from error
+                raise
 
     def close(self):
         with self.lock:

@@ -1,8 +1,69 @@
 # Testing
 
+See [the installed 0.8.4 AP/BLE recovery summary](VALIDATION-0.8.4.md) for the
+later fault-injection results, backup/restoration evidence and scope limits.
+
 ## 0.8.1 installed-package regression
 
 See [the 2026-11-08 installer report](VALIDATION-0.8.1.md) for AP/STA/BLE at both SWD clocks, queue and integrity counters, explicit STOP, post-stop RAM, OTA recovery and remaining limits. It supersedes historical performance claims only for those exact profiles.
+
+## Session recovery regression (2026-11-11)
+
+The session recovery regression includes offline sidecar-exit, stalled-response,
+invalid-frame and detach-error tests, plus saved-node credential boundaries and
+bounded old-lease observation. `npm run test:ui` also checks an unavailable backend's
+exit control, unconfirmed-release warning and saved-node reconnect without USB or
+browser-held credentials using a service double.
+
+On 2026-11-11, an isolated source service with the pinned private backend exercised
+S3 `0.7.3-msc-fixed`, V4 `V4.7.3` and the F411 fixture over existing router STA.
+Terminating the owned workbench sidecar reproduced the old `shared=true` dead end;
+the changed service detached locally and reattached by saved node ID. A second
+shared client remained readable, and restarting the test service retained saved
+node reconnection. Dropping one actual `probe.stream.pull` HTTP response reproduced
+immediate reacquisition failure while the old lease remained. After the bounded
+lease-wait change, the same injection recovered a new MUX generation and read the
+same target UID without replaying an RPC. Final observations were ready, RX=0,
+no owner and no busy operation; test services were stopped.
+
+These are targeted source-level hardware tests, not installer qualification or a
+reproduction of interrupted Flash programming. No target Flash/RAM write, firmware
+update, reset, power cycle or development-computer Wi-Fi change was performed.
+BLE was checked read-only; BLE/AP fault recovery and long-duration load were not
+qualified. Retained failed attempts and detailed evidence remain private.
+
+## Flash staging failure regression (2026-11-11)
+
+The subsequent authorized native Flash experiment first read the F411's entire
+512 KiB twice, compared both copies with the earlier verified backup, then
+programmed the original contents of APP sectors 3 and 4 and verified a complete
+512 KiB readback. Bootloader and option-byte writes were excluded.
+
+Dropping a real file-chunk reply after 6 KiB reproduced a retained staging upload:
+the target had not been programmed, but the still-renewed owner prevented another
+upload. With the adapter cleanup, the same injection left no active upload and
+no native programming command. Full readback was unchanged, and a separately
+journaled download in that same backend succeeded and matched the complete backup.
+Offline cases also cover lost begin/commit replies, failed cleanup, preexisting or
+changed upload identity, wrong offsets, and cached/committed digest mismatches.
+These source tests do not qualify an installer, other targets, or physical power loss.
+
+A separate real-programming case dropped a reply containing 5% download progress.
+The original job remained unknown and was not replayed. After the native timeout
+window, explicit wireless recovery advanced the transport generation; the full
+512 KiB matched the backup. A separately journaled reset then succeeded and the
+CPU halt-status bit was clear. Communication recovery alone was not treated as
+proof of successful Flash programming.
+
+The same STA fixture also passed lost upload-begin and commit replies followed
+by a new verified download; client exit during programming followed by terminal
+job query and saved-node reattach; and a discarded submission reply recovered
+through the retained request ID without another submission. Losing the native
+programming-command acknowledgement retained an unknown job, then passed explicit
+wireless recovery, full readback and a separately recorded reset. Active-operation
+attach rejection was expected; it did not cancel programming. All seven effective
+fault cases retained unique radio RPC IDs. Final Flash matched the backup, protection
+was unchanged, the CPU was running, and the gateway was ready with no owner or RX backlog.
 
 ## Offline source checks
 
@@ -182,6 +243,21 @@ The 0.8.0 result is summarized in [VALIDATION-0.8.0](VALIDATION-0.8.0.md). Histo
 For a new hardware qualification, record device/firmware versions, verify full backups, exercise STA/AP/BLE with the original MCP and workbench, validate complete target readback, RAM challenge, RTT bidirectional data, SuperWatch, Trace and both client-detach directions. Restore the target/C6 and S3 configuration and verify restoration. Publish only redacted summaries. Stop on an unknown write outcome and inspect the retained job; never replay it blindly.
 
 BOOT gestures, physical RGB colors, sustained stress, other targets, Android business flows and public WSS target sessions need explicit separate evidence. CI does not stand in for these tests.
+
+### Installed session recovery
+
+Qualify the real NSIS upgrade as well as extraction: compare the complete installed
+resource inventory, including absence of obsolete private backend dependencies.
+Check that a running service or backend makes the installer refuse replacement
+without killing the process or changing files. Use the installed GUI's WebView2
+for saved-node attachment, failed detach acknowledgement, normal exit and restart
+checks, and record the actual CLI/backend process paths and hashes.
+Authorized flash interruption checks require fresh full backups and restoration
+evidence. Cover staging begin/chunk/commit replies, client exit, lost job submission
+reply, and native programming/progress replies. Reconcile unknown jobs without
+replaying them; verify full Flash, protection and CPU state before ending the run.
+Keep these hardware checks separate from ordinary tests and qualify each radio
+route explicitly.
 
 ### Continuous memory reads over radio
 

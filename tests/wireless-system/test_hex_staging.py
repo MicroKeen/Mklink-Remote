@@ -16,8 +16,9 @@ class HexStaging(unittest.TestCase):
         data=b':0100000012ED\n:00000001FF\n';digest=hashlib.sha256(data).hexdigest()
         link=WirelessLink(Mock(),'020000123456');link.hex_files_supported=True;link.file_chunk=10
         received=bytearray();calls=[]
-        def call(method,params):
+        def call(method,params=None):
             calls.append(method)
+            if method=='probe.files.status':return {'upload_active':False}
             if method=='probe.files.begin':
                 self.assertEqual(params,{'kind':'HEX','size':len(data),'sha256':digest})
                 return {'complete':False,'upload_id':'test'}

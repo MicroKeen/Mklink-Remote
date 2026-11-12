@@ -5,11 +5,14 @@ import './target.css';
 
 type Client={id:string;kind:string;name:string;streams:string[]};
 type Snapshot={instance_id:string;probe_id:string;transport:string;clients:Client[];busy:boolean;site?:string|null;skill_entry_ready?:boolean};
-export default function SharedTargetPanel({nodeId,address,bleAddress,token,beforeAttach,onConnectionChange}:{onConnectionChange:(active:boolean)=>void;nodeId:string;address:string;bleAddress:string;token:string;beforeAttach:()=>Promise<void>}){
+type SavedNode={node_id:string;transport:string;address:string};
+export default function SharedTargetPanel({active,nodeId,address,bleAddress,token,beforeAttach,onConnectionChange}:{active:boolean;onConnectionChange:(active:boolean)=>void;nodeId:string;address:string;bleAddress:string;token:string;beforeAttach:()=>Promise<void>}){
   const [node,setNode]=useState(nodeId),[transport,setTransport]=useState('ble');
   const [http,setHttp]=useState(address),[ble,setBle]=useState(bleAddress),[secret,setSecret]=useState(token);
   const [project,setProject]=useState(()=>localStorage.getItem('mklink-target-project')??''),[axf,setAxf]=useState('');
   const [snapshot,setSnapshot]=useState<Snapshot|null>(null),[busy,setBusy]=useState(false),[error,setError]=useState('');
+  const [nodes,setNodes]=useState<SavedNode[]>([]),[saved,setSaved]=useState('');
+  const attached=!!snapshot||active;
   const [memoryAddress,setMemoryAddress]=useState('0x1FFF7A10'),[size,setSize]=useState('12'),[memory,setMemory]=useState('');
   useEffect(()=>{if(nodeId)setNode(nodeId);},[nodeId]);
   useEffect(()=>{if(token)setSecret(token);},[token]);
@@ -18,23 +21,27 @@ export default function SharedTargetPanel({nodeId,address,bleAddress,token,befor
   useEffect(()=>{if(snapshot)onConnectionChange(true);},[snapshot?.instance_id]);
   async function run(task:()=>Promise<void>){setBusy(true);setError('');try{await task();}catch(e){setError(String(e));}finally{setBusy(false);}}
   useEffect(()=>{let live=true;void api.sharedControl('status',{}).then(s=>{if(live)setSnapshot(s as Snapshot);}).catch(()=>{});return()=>{live=false;};},[]);
+  useEffect(()=>{let live=true;void api.sharedControl('saved_nodes',{}).then(s=>{if(live)setNodes(s as SavedNode[]);}).catch(e=>{if(live)setError(String(e));});return()=>{live=false;};},[]);
   async function refresh(){setSnapshot(await api.sharedControl('status',{}) as Snapshot);}
-  useEffect(()=>{if(!snapshot||busy)return;let live=true;const timer=setInterval(()=>{void api.sharedControl('status',{}).then(s=>{if(live)setSnapshot(s as Snapshot);}).catch(e=>{if(live)setError(String(e));});},4000);return()=>{live=false;clearInterval(timer);};},[!!snapshot,busy]);
-  const valid=/^[0-9a-f]{12}$/.test(node)&&/^[0-9a-f]{32}$/.test(secret)&&!!project&&(transport==='http'?!!http:!!ble);
+  useEffect(()=>{if(!attached||busy)return;let live=true,running=false;const timer=setInterval(()=>{if(running)return;running=true;void api.sharedControl('status',{}).then(s=>{if(live)setSnapshot(s as Snapshot);}).catch(e=>{if(live)setError(String(e));}).finally(()=>{running=false;});},4000);return()=>{live=false;clearInterval(timer);};},[attached,busy]);
+  const valid=!!project&&(saved?nodes.some(n=>n.node_id===saved):/^[0-9a-f]{12}$/.test(node)&&/^[0-9a-f]{32}$/.test(secret)&&(transport==='http'?!!http:!!ble));
   return <div className="target-workspace shared-target">
-    <section className="panel"><div className="panel-heading"><div><h2>共享调试</h2><p>工作台与 AI 技能连接同一台目标，共用采集和任务记录。</p></div><span className={`badge ${snapshot?'good':'muted'}`}>{demo?'演示 · ':''}{snapshot?'已接入':'待接入'}</span></div>
+    <section className="panel"><div className="panel-heading"><div><h2>共享调试</h2><p>工作台与 AI 技能连接同一台目标，共用采集和任务记录。</p></div><span className={`badge ${snapshot?'good':'muted'}`}>{demo?'演示 · ':''}{snapshot?'已接入':active?'连接待核实':'待接入'}</span></div>
       <div className="panel-body">
-        {!snapshot&&<>
+        {!attached&&<>
+        {nodes.length>0&&<div className="field"><label htmlFor="shared-saved">已保存设备</label><SelectControl id="shared-saved" disabled={busy} value={saved||'manual'} onValueChange={v=>setSaved(v==='manual'?'':v)} options={[{value:'manual',label:'手动输入连接信息'},...nodes.map(n=>({value:n.node_id,label:`${n.node_id} · ${n.transport==='ble'?'蓝牙':'Wi-Fi'} · ${n.address}`}))]}/><small>复用本机已保存的配对信息，无需再次接 USB。</small></div>}
+        {!saved&&<>
         <div className="target-fields"><div className="field"><label htmlFor="shared-node">S3 节点</label><input id="shared-node" disabled={!!snapshot} value={node} onChange={e=>setNode(e.target.value.trim().toLowerCase())} placeholder="12 位节点 ID" autoComplete="off"/></div>
           <div className="field"><label htmlFor="shared-transport">连接方式</label><SelectControl id="shared-transport" disabled={!!snapshot} value={transport} onValueChange={setTransport} options={[{value:'ble',label:'蓝牙'},{value:'http',label:'Wi-Fi / AP 热点'}]}/></div>
           <div className="field"><label htmlFor="shared-address">{transport==='ble'?'蓝牙地址':'设备地址'}</label><input id="shared-address" disabled={!!snapshot} value={transport==='ble'?ble:http} onChange={e=>transport==='ble'?setBle(e.target.value):setHttp(e.target.value)} placeholder={transport==='ble'?'02:00:00:12:34:56':'http://192.168.4.1'}/></div></div>
         <div className="field"><label htmlFor="shared-token">管理密钥</label><input id="shared-token" type="password" autoComplete="off" disabled={!!snapshot} value={secret} onChange={e=>setSecret(e.target.value.trim())}/><small>使用 USB 配对获取的密钥。技能的访问凭据由工作台单独管理。</small></div>
+        </>}
         <div className="field"><label htmlFor="shared-project">目标工程</label><div className="target-path"><input id="shared-project" disabled={!!snapshot} value={project} onChange={e=>setProject(e.target.value)}/><button disabled={busy||!!snapshot} onClick={()=>void run(async()=>{const value=await api.chooseTargetPath('project');if(value)setProject(value);})}>选择目录</button></div></div>
         <div className="field"><label htmlFor="shared-axf">AXF / ELF 符号文件</label><div className="target-path"><input id="shared-axf" disabled={!!snapshot} value={axf} onChange={e=>setAxf(e.target.value)} placeholder="RTT、变量和 Trace 使用与目标固件匹配的文件"/><button disabled={busy||!!snapshot} onClick={()=>void run(async()=>{const value=await api.chooseTargetPath('symbols');if(value)setAxf(value);})}>选择文件</button></div></div>
         </>}
-        <div className="form-actions">{!snapshot&&<button className="primary" disabled={busy||!valid} onClick={()=>void run(async()=>{await beforeAttach();const s=await api.sharedControl('attach',{node:{node_id:node,transport,address:transport==='ble'?ble:http,token:secret},project_root:project,axf});setSnapshot(s as Snapshot);localStorage.setItem('mklink-target-project',project);})}>{busy?'处理中…':'接入共享后台'}</button>}
+        <div className="form-actions">{!attached&&<button className="primary" disabled={busy||!valid} onClick={()=>void run(async()=>{await beforeAttach();const identity=saved?{node_id:saved}:{node:{node_id:node,transport,address:transport==='ble'?ble:http,token:secret}};const s=await api.sharedControl('attach',{...identity,project_root:project,axf});setSnapshot(s as Snapshot);localStorage.setItem('mklink-target-project',project);})}>{busy?'处理中…':'接入共享后台'}</button>}
           <button disabled={busy||!snapshot} onClick={()=>void run(async()=>{await api.sharedBrowser();})}>打开调试工作台</button>
-          <button disabled={busy||!snapshot} onClick={()=>void run(async()=>{await api.sharedControl('detach',{});setSnapshot(null);onConnectionChange(false);setMemory('');})}>退出本窗口会话</button></div>
+          <button disabled={busy||!attached} onClick={()=>void run(async()=>{const result=await api.sharedControl('detach',{}) as {warning?:string};setSnapshot(null);onConnectionChange(false);setMemory('');if(result.warning)setError(result.warning);})}>退出本窗口会话</button></div>
         <p className="target-note">调试工作台在浏览器中打开。退出本窗口后，其他已连接的 GUI 和技能会话继续工作。切换 Wi-Fi、热点或蓝牙前，请先结束该节点的所有调试会话。</p>
         {error&&<p className="inline-warn" role="alert">{error}</p>}
       </div></section>

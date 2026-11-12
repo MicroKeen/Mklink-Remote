@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.8.4 — Windows
+
+- Keep workbench control JSON valid on Windows legacy code pages, including Chinese project paths, recovery errors and retained job status.
+- Exclude build-machine source URLs from frozen backend metadata, including stale metadata in reused build directories.
+- Pass the installed AP/BLE recovery cases described in [the 0.8.4 validation summary](docs/VALIDATION-0.8.4.md); historical STA results do not qualify new installer bytes.
+
+## 0.8.3 — Windows
+
+- Allow local session exit after backend acknowledgement loss, bound IPC waits, and reconnect using saved node credentials.
+- Wait for an expired recoverable wireless lease without taking over another live owner or replaying target operations.
+- Release only unfinished temporary uploads after staging errors; preserve committed files and report unconfirmed cleanup.
+- Find retained jobs by the saved request ID when a submission reply containing the job ID is lost.
+- Remove obsolete private backend dependencies during upgrades and refuse replacement while Mklink processes are using the installed files.
+
 ## 0.8.2 — Windows (2026-11-10)
 
 - Bundle S3 firmware 0.7.3-msc-fixed for the third-party N16R8 board. NimBLE host allocations move to PSRAM, and MSC handles transfer allocation failure without releasing the old buffer early.

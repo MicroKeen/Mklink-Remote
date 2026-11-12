@@ -45,6 +45,7 @@
     "desktop/mklink-wireless-config/scripts/prepare-device-web.mjs",
     "desktop/mklink-wireless-config/scripts/verify.mjs",
     "desktop/mklink-wireless-config/scripts/public-ui-smoke.cjs",
+    "desktop/mklink-wireless-config/scripts/session-recovery-smoke.cjs",
     "desktop/mklink-wireless-config/docs/AGENT-CLI.md",
     "boards/third-party-esp32-s3-n16r8/README.md",
     "boards/third-party-esp32-s3-n16r8/firmware/wireless_gateway/CMakeLists.txt",
@@ -74,7 +75,8 @@
     "tests/test_http_diagnostics.c",
     "tests/test_http_reply.c",
     "tests/test_mux_recovery.c",
-    "docs/VALIDATION-0.8.1.md"
+    "docs/VALIDATION-0.8.1.md",
+    "docs/VALIDATION-0.8.4.md"
   ],
   "exclude": [
     "**/__pycache__/**",

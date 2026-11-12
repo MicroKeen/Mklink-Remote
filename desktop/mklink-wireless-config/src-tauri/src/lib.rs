@@ -402,6 +402,7 @@ async fn shared_control(app:tauri::AppHandle,state:State<'_,AppState>,method:Str
     let root=resource(&app,"resources")?;
     tauri::async_runtime::spawn_blocking(move || {
         let _gate=service.operation_gate.lock().unwrap();
+        if method=="saved_nodes" { return shared::Client::saved_nodes(&root); }
         if service.target.lock().unwrap().running || service.job.lock().unwrap().running { return Err("请等待当前设备任务完成".into()); }
         let mut shared=service.shared.lock().unwrap();
         if method=="attach" {
@@ -414,8 +415,9 @@ async fn shared_control(app:tauri::AppHandle,state:State<'_,AppState>,method:Str
             return Ok(status);
         }
         if method=="detach" {
-            if let Some(client)=shared.as_mut(){client.call("detach",json!({}))?;}
-            *shared=None;return Ok(json!({"detached":true}));
+            let result=shared::detach(&mut shared);
+            if let Some(warning)=result["warning"].as_str(){service.log_from("shared",warning);}
+            return Ok(result);
         }
         if !["status","call","job.start","job.status"].contains(&method.as_str()){return Err("不支持的共享操作".into());}
         let client=shared.as_mut().ok_or("尚未接入共享后台")?;

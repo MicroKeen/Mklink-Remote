@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Mklink 无线工作台",
-  "version": "0.8.2",
+  "version": "0.8.4",
   "identifier": "dev.mklink.wireless-config",
   "build": {
     "beforeDevCommand": "npm run dev",

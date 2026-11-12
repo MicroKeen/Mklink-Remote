@@ -29,6 +29,7 @@ export const api={
   exportDiagnostics:async(params:{level:string;search:string;format:string}):Promise<{path:string;entries:number}>=>demo?{path:'演示模式',entries:0}:call('diagnostics_export',params),
   sharedControl:async(method:string,params:Record<string,unknown>):Promise<unknown>=>{
     if(!demo)return call('shared_control',{method,params});
+    if(method==='saved_nodes')return [{node_id:'020000123456',transport:'ble',address:'02:00:00:12:34:56'}];
     if(method==='attach')sharedDemoConnected=true;
     if(method==='status'&&!sharedDemoConnected)throw Error('未接入');
     if(method==='call')return {data_base64:btoa('DEMO-ONLY-UID')};

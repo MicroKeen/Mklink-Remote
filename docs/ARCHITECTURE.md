@@ -128,6 +128,12 @@ nor silently selects legacy sampling. Old V4.7.2 measurements are historical and
 do not qualify this backend. No probe firmware update is performed by staging.
 
 Native firmware staging accepts BIN and Intel HEX, bounded to 1 MiB per file.
+Staging is serialized independently of native reads and lease renewal. A failed
+begin/chunk/commit is never replayed. After a failure, the adapter queries the
+same lease's upload state and aborts only its unfinished temporary upload;
+an already committed file is retained. An existing or changed upload is not
+claimed. If cleanup cannot be confirmed, the original error and recovery hint
+are returned. No programming command follows an unconfirmed commit.
 HEX requires the gateway's `hex_files_supported` capability; older gateways
 reject it before upload. The adapter validates HEX records and preserves the
 original bytes, addresses and sparse segments for native MKLink `load.hex`.
@@ -143,3 +149,18 @@ explicitly; absent quality counters remain unknown.
 CLI `help` describes the invoking executable, while `call capabilities` queries
 the running shared local service. Compare their backend binding after upgrading
 the desktop; do not stop an older service while it owns active jobs or clients.
+
+The workbench retires its local attachment even when the detach acknowledgement
+is lost. It reports `backend_detach_confirmed=false` and a warning rather than
+claiming that the backend or its jobs stopped. IPC framing failures and deadlines
+retire only the workbench sidecar; no request is replayed and the independent
+runtime is never killed. Status and detach have a 45-second IPC deadline. Long
+capture calls retain budgets above the backend's supported operation limits.
+Saved-node discovery returns identity, transport and address without credentials;
+explicit reattachment by node ID resolves the existing private registration on
+the backend. Device quarantine and job ownership checks still apply.
+For an advertised recoverable MUX quarantine, a new connection observes the old
+15-second lease until it expires, with a bounded wait, before submitting one
+acquire and the existing recovery handshake. A live or busy owner is not revoked;
+legacy/unsupported quarantine still requires maintenance. Recovery never resolves
+or replays the previous operation.

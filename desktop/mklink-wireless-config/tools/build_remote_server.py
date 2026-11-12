@@ -34,7 +34,11 @@ def main():
     subprocess.run(command,cwd=source,env=env,check=True)
     app=Path(__file__).resolve().parents[1]
     destination=app/'src-tauri/resources/device-tool/remote-server'
-    if not args.stage_only:shutil.copytree(out/'dist/mklink-remote-server',destination,dirs_exist_ok=True)
+    frozen=out/'dist/mklink-remote-server'
+    if not args.stage_only:shutil.copytree(frozen,destination,dirs_exist_ok=True)
+    for bundled in ([frozen] if args.stage_only else [frozen,destination]):
+        for metadata in (bundled/'_internal').glob('*.dist-info/direct_url.json'):
+            metadata.unlink()  # pip's build-machine paths are not runtime metadata.
     print('REMOTE_SERVER_FROZEN — original MCP remains external')
 
 if __name__=='__main__':main()

@@ -24,7 +24,7 @@ const METHODS:&[(&str,&str)]=&[
     ("start_node_update",r#"{"path":"node APP","sha":"sha256","node":"node ID","lease":"lease token"}"#),
     ("start_target",r#"{"request":{"action":"identify","node_id":"12 hex digits","project_root":"absolute directory","axf":"optional matching ELF","params":{}}}"#),
     ("stop_target","{}"),("target_job","{}"),
-    ("shared_control",r#"{"method":"attach|status|call|job.start|job.status|detach","params":{}}"#),
+    ("shared_control",r#"{"method":"saved_nodes|attach|status|call|job.start|job.status|detach","params":{}}"#),
     ("shared_browser","{}"),
     ("choose_target_path",r#"{"path":"explicit existing file or directory"}"#),
 ];
